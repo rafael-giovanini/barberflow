@@ -3,9 +3,11 @@
 Usa um banco SQLite temporário por teste; nenhum banco de desenvolvimento/produção
 é aberto ou alterado por esta suíte.
 """
+import hashlib
 import importlib
 import os
 import tempfile
+from datetime import datetime, timedelta, timezone
 import unittest
 from unittest.mock import patch
 
@@ -118,6 +120,76 @@ class SecurityRouteTests(unittest.TestCase):
         response = self._login("cliente@example.test")
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("barbearia_session", response.cookies)
+
+    def test_password_reset_token_is_single_use_and_revokes_existing_session(self):
+        self._login("cliente@example.test")
+        db = self.app_module.get_db()
+        user = db.execute("SELECT id FROM users WHERE email=?", ("cliente@example.test",)).fetchone()
+        raw_token = "token-de-teste-nao-utilizar-em-producao"
+        now = datetime.now(timezone.utc)
+        db.execute(
+            """INSERT INTO password_reset_tokens
+               (user_id, email, token_hash, expires_at, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (user["id"], "cliente@example.test",
+             hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+             (now + timedelta(minutes=30)).isoformat(), now.isoformat()),
+        )
+        db.commit()
+        db.close()
+
+        response = self.client.post("/redefinir-senha", data={
+            "token": raw_token,
+            "new_password": "SenhaNova-456",
+            "confirm_password": "SenhaNova-456",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/login?senha_redefinida=1")
+
+        # A troca de senha deve invalidar a sessão que já estava aberta.
+        account_page = self.client.get("/minha-conta")
+        self.assertEqual(account_page.status_code, 303)
+        self.assertEqual(account_page.headers["location"], "/login")
+
+        # O token não pode ser reutilizado para uma segunda troca.
+        reused = self.client.post("/redefinir-senha", data={
+            "token": raw_token,
+            "new_password": "OutraSenha-789",
+            "confirm_password": "OutraSenha-789",
+        })
+        self.assertEqual(reused.status_code, 200)
+        self.assertIn("O link é inválido, expirou ou já foi utilizado.", reused.text)
+
+        self.client.get("/logout")
+        self.assertEqual(self._login("cliente@example.test", "SenhaNova-456").status_code, 303)
+        self.client.get("/logout")
+        self.assertEqual(self._login("cliente@example.test", "OutraSenha-789").status_code, 200)
+
+    def test_expired_password_reset_token_is_rejected(self):
+        db = self.app_module.get_db()
+        user = db.execute("SELECT id FROM users WHERE email=?", ("cliente@example.test",)).fetchone()
+        raw_token = "token-expirado-de-teste"
+        now = datetime.now(timezone.utc)
+        db.execute(
+            """INSERT INTO password_reset_tokens
+               (user_id, email, token_hash, expires_at, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (user["id"], "cliente@example.test",
+             hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+             (now - timedelta(minutes=1)).isoformat(),
+             (now - timedelta(minutes=31)).isoformat()),
+        )
+        db.commit()
+        db.close()
+
+        response = self.client.post("/redefinir-senha", data={
+            "token": raw_token,
+            "new_password": "SenhaNova-456",
+            "confirm_password": "SenhaNova-456",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("O link é inválido, expirou ou já foi utilizado.", response.text)
+        self.assertEqual(self._login("cliente@example.test", "SenhaTeste-123").status_code, 303)
 
 
 if __name__ == "__main__":
