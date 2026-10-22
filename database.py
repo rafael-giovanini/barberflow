@@ -151,6 +151,31 @@ def init_db():
     )
     """)
 
+    # Migração compatível: acrescenta campos sem remover ou recriar registros.
+    user_columns = {row["name"] for row in c.execute("PRAGMA table_info(users)").fetchall()}
+    if "active" not in user_columns:
+        c.execute("ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+    if "session_version" not in user_columns:
+        c.execute("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0")
+
+    # Tokens de recuperação: apenas o hash é armazenado; o token em claro só vai por e-mail.
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        email TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        used_at TEXT,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    """)
+    c.execute("""
+    CREATE INDEX IF NOT EXISTS idx_password_reset_email_created
+    ON password_reset_tokens(email, created_at)
+    """)
+
     conn.commit()
 
     # Sempre garante configurações padrão
