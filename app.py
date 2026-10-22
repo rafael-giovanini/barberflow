@@ -241,10 +241,10 @@ def cadastro(request: Request, name: str = Form(...), email: str = Form(...),
     name = name.strip()
     email = email.strip().lower()
     phone = phone.strip()
-    if not name or "@" not in email or len(password) < 6:
+    if not name or "@" not in email or len(password) < 8:
         return templates.TemplateResponse("cadastro.html", {
             "request": request, "user": None,
-            "error": "Informe nome e e-mail válidos e uma senha com pelo menos 6 caracteres."
+            "error": "Informe nome e e-mail válidos e uma senha com pelo menos 8 caracteres."
         })
     db = get_db()
     existing = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
@@ -295,6 +295,10 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
         "INSERT INTO auth_login_attempts (email, client_ip, attempted_at, succeeded) VALUES (?, ?, ?, ?)",
         (normalized_email, client_ip, now.isoformat(), 1 if valid else 0),
     )
+    if valid:
+        # Um login válido remove falhas anteriores para não manter o usuário bloqueado.
+        db.execute("DELETE FROM auth_login_attempts WHERE email=? AND client_ip=? AND succeeded=0",
+                   (normalized_email, client_ip))
     # Limpeza limitada para impedir crescimento indefinido da tabela de tentativas.
     db.execute("DELETE FROM auth_login_attempts WHERE attempted_at < ?",
                ((now - timedelta(days=7)).isoformat(),))
