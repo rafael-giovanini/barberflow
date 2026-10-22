@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Entrar — Barbearia{% endblock %}
+{% block content %}
+<div class="form-card">
+  <h2>Entrar</h2>
+  {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
+  <form method="POST" action="/login">
+    <div class="form-group">
+      <label>E-mail</label>
+      <input type="email" name="email" class="form-control" required placeholder="seu@email.com">
+    </div>
+    <div class="form-group">
+      <label>Senha</label>
+      <input type="password" name="password" class="form-control" required placeholder="••••••••">
+    </div>
+    <button type="submit" class="btn btn-dourado btn-block">Entrar</button>
+  </form>
+  <p class="text-center mt-2 text-muted">
+    Não tem conta? <a href="/cadastro">Cadastre-se grátis</a>
+  </p>
+  <hr style="border-color:var(--cinza); margin:20px 0;">
+  <p class="text-center text-muted" style="font-size:0.85rem;">
+    <strong>Acesso demo (barbeiro):</strong><br>
+    admin@barbearia.com / admin123
+  </p>
+</div>
+{% endblock %}

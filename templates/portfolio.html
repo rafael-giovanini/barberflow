@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Portfólio de Cortes — Barbearia{% endblock %}
+{% block content %}
+<section class="section container">
+  <h2 class="section-title">Portfólio de Cortes</h2>
+  <p class="section-sub">Cada corte com explicação detalhada — encontre o estilo ideal para você</p>
+
+  <div class="filter-tabs">
+    <button class="filter-tab active" data-filter="todos">Todos</button>
+    {% for cat in categories %}
+    <button class="filter-tab" data-filter="{{ cat }}">{{ cat }}</button>
+    {% endfor %}
+  </div>
+
+  <div class="grid grid-3" id="portfolio-grid">
+    {% for p in items %}
+    <div class="card portfolio-item" data-category="{{ p.category }}">
+      <img src="{{ p.image_url }}" alt="{{ p.name }}" class="card-img" style="height:240px;object-fit:cover;" loading="lazy"
+           onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 400 300%22><rect fill=%22%232a2a2a%22 width=%22400%22 height=%22300%22/><text x=%22200%22 y=%22150%22 fill=%22%23c9a227%22 text-anchor=%22middle%22 font-size=%2220%22>{{ p.name }}</text></svg>'">
+      <div class="card-body">
+        <span class="category-badge">{{ p.category }}</span>
+        <h3 class="card-title">{{ p.name }}</h3>
+        <p class="card-desc">{{ p.description }}</p>
+        <a href="/agendar{% if p.service_id %}?service={{ p.service_id }}{% endif %}" class="btn btn-outline btn-sm">Quero esse corte</a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.filter-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const filter = btn.dataset.filter;
+    document.querySelectorAll('.portfolio-item').forEach(item => {
+      item.style.display = (filter === 'todos' || item.dataset.category === filter) ? '' : 'none';
+    });
+  });
+});
+</script>
+{% endblock %}

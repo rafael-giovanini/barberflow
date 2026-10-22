@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Serviços & Preços — Barbearia{% endblock %}
+{% block content %}
+<section class="section container">
+  <h2 class="section-title">Serviços & Preços</h2>
+  <p class="section-sub">Todos os nossos serviços com valores transparentes</p>
+
+  {% set current_cat = namespace(value='') %}
+  {% for s in services %}
+    {% if s.category != current_cat.value %}
+      {% if not loop.first %}</div>{% endif %}
+      <h3 style="color:var(--dourado); margin: 28px 0 16px; text-transform:uppercase; letter-spacing:2px; font-size:1.1rem;">
+        {{ s.category }}
+      </h3>
+      {% set current_cat.value = s.category %}
+    {% endif %}
+    <div class="service-row">
+      <div class="service-info">
+        <h3>{{ s.name }}</h3>
+        <p>{{ s.description }}</p>
+      </div>
+      <div class="flex" style="gap:16px;">
+        <span class="text-muted">{{ s.duration_min }} min</span>
+        <span class="service-price">R$ {{ "%.2f"|format(s.price) }}</span>
+        <a href="/agendar?service={{ s.id }}" class="btn btn-dourado btn-sm">Agendar</a>
+      </div>
+    </div>
+  {% endfor %}
+</section>
+{% endblock %}

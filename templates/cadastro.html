@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Cadastro — Barbearia{% endblock %}
+{% block content %}
+<div class="form-card">
+  <h2>Criar Conta</h2>
+  {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
+  <form method="POST" action="/cadastro">
+    <div class="form-group">
+      <label>Nome completo</label>
+      <input type="text" name="name" class="form-control" required placeholder="Seu nome">
+    </div>
+    <div class="form-group">
+      <label>E-mail</label>
+      <input type="email" name="email" class="form-control" required placeholder="seu@email.com">
+    </div>
+    <div class="form-group">
+      <label>Telefone / WhatsApp</label>
+      <input type="tel" name="phone" class="form-control" placeholder="(18) 99999-9999">
+    </div>
+    <div class="form-group">
+      <label>Senha</label>
+      <input type="password" name="password" class="form-control" required minlength="6" placeholder="Mínimo 6 caracteres">
+    </div>
+    <button type="submit" class="btn btn-dourado btn-block">Criar conta</button>
+  </form>
+  <p class="text-center mt-2 text-muted">Já tem conta? <a href="/login">Faça login</a></p>
+</div>
+{% endblock %}

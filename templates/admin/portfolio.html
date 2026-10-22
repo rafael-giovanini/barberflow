@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Portfólio — Painel do Barbeiro{% endblock %}
+{% block content %}
+<div class="admin-layout">
+  <aside class="admin-sidebar">
+    <a href="/admin">📊 Dashboard</a>
+    <a href="/admin/agenda">📅 Agenda</a>
+    <a href="/admin/servicos">✂️ Serviços</a>
+    <a href="/admin/produtos">🛍️ Produtos</a>
+    <a href="/admin/portfolio" class="active">📸 Portfólio</a>
+    <a href="/admin/barbeiros">👤 Barbeiros</a>
+    <a href="/admin/pedidos">📦 Pedidos</a>
+    <a href="/app" target="_blank">📱 App Mobile</a>
+    <a href="/admin/configuracoes">⚙️ Configurações</a>
+    <a href="/">🌐 Ver Site</a>
+    <a href="/logout">🚪 Sair</a>
+  </aside>
+
+  <div class="admin-content">
+    <h1>Gerenciar Portfólio</h1>
+    <p class="text-muted mb-4">Adicione fotos dos seus cortes com explicação — isso ajuda o cliente a escolher!</p>
+
+    <button class="btn btn-dourado btn-sm mb-4" onclick="document.getElementById('modal').classList.add('open')">+ Adicionar Foto</button>
+
+    <div class="grid grid-3">
+      {% for p in items %}
+      <div class="card">
+        <img src="{{ p.image_url }}" alt="{{ p.name }}" style="width:100%;height:160px;object-fit:cover;"
+             onerror="this.style.background='var(--cinza)'">
+        <div class="card-body">
+          <span class="category-badge">{{ p.category }}</span>
+          <h3 class="card-title" style="font-size:0.95rem;">{{ p.name }}</h3>
+          <p class="card-desc" style="font-size:0.8rem;">{{ p.description[:60] }}</p>
+          <form method="POST" action="/admin/portfolio/excluir" onsubmit="return confirm('Remover esta foto?')">
+            <input type="hidden" name="item_id" value="{{ p.id }}">
+            <button class="btn btn-danger btn-sm btn-block" type="submit">Remover</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <button class="modal-close" onclick="document.getElementById('modal').classList.remove('open')">✕</button>
+    <h3>Nova Foto no Portfólio</h3>
+    <form method="POST" action="/admin/portfolio/salvar">
+      <div class="form-group">
+        <label>Nome do corte / estilo</label>
+        <input type="text" name="name" class="form-control" required placeholder="Ex: Degradê Médio com Textura">
+      </div>
+      <div class="form-group">
+        <label>Explicação (o cliente vai ler isso!)</label>
+        <textarea name="description" class="form-control" rows="3" required placeholder="Descreva o corte, quem combina, como manter..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>URL da imagem</label>
+        <input type="url" name="image_url" class="form-control" required placeholder="https://... (use Imgur ou similar)">
+      </div>
+      <div class="flex">
+        <div class="form-group" style="flex:1;">
+          <label>Categoria</label>
+          <select name="category" class="form-control">
+            <option>Degradê</option><option>Clássico</option><option>Moderno</option>
+            <option>Curto</option><option>Barba</option><option>Afro</option><option>Infantil</option>
+          </select>
+        </div>
+        <div class="form-group" style="flex:1;">
+          <label>Serviço relacionado (opcional)</label>
+          <select name="service_id" class="form-control">
+            <option value="">Nenhum</option>
+            {% for s in services %}
+            <option value="{{ s.id }}">{{ s.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-dourado btn-block">Adicionar ao Portfólio</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

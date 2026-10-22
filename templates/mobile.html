@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="{{ settings.color_primary }}">
+  <link rel="manifest" href="/manifest.json">
+  <title>{{ settings.shop_name }} — App do Barbeiro</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color: transparent; }
+    :root {
+      --p: {{ settings.color_primary }};
+      --p2: {{ settings.color_primary_light }};
+      --bg: {{ settings.color_bg }};
+      --card: {{ settings.color_card }};
+      --txt: {{ settings.color_text }};
+      --muted: #888;
+    }
+    body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--txt); padding-bottom: 70px; min-height:100vh; }
+    .header { background: var(--card); padding: 16px 20px; border-bottom: 2px solid var(--p); position: sticky; top:0; z-index:10; }
+    .header h1 { font-size: 1.1rem; color: var(--p); text-transform: uppercase; letter-spacing: 1px; }
+    .header p { font-size: 0.8rem; color: var(--muted); }
+    .page { display:none; padding: 16px; }
+    .page.active { display:block; animation: fade .2s; }
+    @keyframes fade { from {opacity:0; transform: translateY(8px);} to {opacity:1;} }
+    .section-title { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: var(--p); margin: 16px 0 10px; font-weight: 700; }
+    .appt-card { background: var(--card); border-radius: 12px; padding: 14px; margin-bottom: 10px; border-left: 4px solid var(--p); display:flex; gap:12px; align-items:center; }
+    .appt-time { font-size: 1.4rem; font-weight: 800; color: var(--p); min-width: 60px; }
+    .appt-info { flex:1; }
+    .appt-info .name { font-weight: 700; font-size: 1rem; }
+    .appt-info .detail { font-size: 0.8rem; color: var(--muted); }
+    .appt-actions { display:flex; flex-direction:column; gap:6px; }
+    .btn { padding: 10px 14px; border-radius: 8px; border: none; font-weight: 700; font-size: 0.8rem; cursor: pointer; }
+    .btn-ok { background: #2ecc71; color: white; }
+    .btn-no { background: #e74c3c; color: white; }
+    .btn-wpp { background: #25D366; color: white; text-decoration:none; display:inline-block; text-align:center; }
+    .item-row { background: var(--card); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; display:flex; justify-content:space-between; align-items:center; }
+    .item-row .name { font-weight: 600; font-size: 0.95rem; }
+    .item-row .sub { font-size: 0.75rem; color: var(--muted); }
+    .item-row .price { color: var(--p); font-weight: 800; }
+    .empty { text-align:center; color: var(--muted); padding: 40px 20px; font-size: 0.9rem; }
+    .stat-row { display:flex; gap:10px; margin-bottom: 16px; }
+    .stat { flex:1; background: var(--card); border-radius: 12px; padding: 14px; text-align:center; }
+    .stat .v { font-size: 1.5rem; font-weight: 800; color: var(--p); }
+    .stat .l { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; }
+    .menu-item { background: var(--card); border-radius: 10px; padding: 16px; margin-bottom: 10px; display:flex; align-items:center; gap:14px; text-decoration:none; color: var(--txt); }
+    .menu-item .icon { font-size: 1.5rem; width: 40px; text-align:center; }
+    .menu-item .txt { flex:1; }
+    .menu-item .txt h4 { font-size: 0.95rem; }
+    .menu-item .txt p { font-size: 0.75rem; color: var(--muted); }
+    /* Bottom nav */
+    .bottom-nav { position: fixed; bottom:0; left:0; right:0; background: var(--card); border-top: 2px solid var(--p); display:flex; z-index: 100; padding-bottom: env(safe-area-inset-bottom); }
+    .nav-btn { flex:1; padding: 10px 4px; text-align:center; background:none; border:none; color: var(--muted); font-size: 0.7rem; cursor:pointer; }
+    .nav-btn .icon { font-size: 1.4rem; display:block; margin-bottom: 2px; }
+    .nav-btn.active { color: var(--p); }
+    .badge-scheduled { background: rgba(201,162,39,0.2); color: var(--p); padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; }
+    .badge-completed { background: rgba(46,204,113,0.2); color: #2ecc71; padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; }
+    .install-tip { background: var(--p); color: var(--bg); padding: 10px 14px; border-radius: 10px; font-size: 0.8rem; margin-bottom: 12px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>{{ settings.shop_name }}</h1>
+    <p>Olá, {{ user.name }} — {{ today }}</p>
+  </div>
+
+  <!-- ABA: AGENDA -->
+  <div class="page active" id="page-agenda">
+    <div class="stat-row">
+      <div class="stat"><div class="v">{{ today_appts|selectattr('status','equalto','scheduled')|list|length }}</div><div class="l">Hoje</div></div>
+      <div class="stat"><div class="v">R$ {{ "%.0f"|format(today_appts|selectattr('status','equalto','scheduled')|sum(attribute='service_price')) }}</div><div class="l">Faturar</div></div>
+    </div>
+    <div class="section-title">Agendamentos de Hoje</div>
+    {% set agendados = today_appts|selectattr('status','equalto','scheduled')|list %}
+    {% if not agendados %}
+    <div class="empty">Nenhum agendamento para hoje.<br>Aproveite o tempo livre! ☕</div>
+    {% else %}
+      {% for a in agendados %}
+      <div class="appt-card" id="apt-{{ a.id }}">
+        <div class="appt-time">{{ a.start_time[:5] }}</div>
+        <div class="appt-info">
+          <div class="name">{{ a.customer_name }}</div>
+          <div class="detail">{{ a.service_name }} · R$ {{ "%.2f"|format(a.service_price) }}</div>
+          {% if a.notes %}<div class="detail" style="color:var(--p);">📝 {{ a.notes }}</div>{% endif %}
+        </div>
+        <div class="appt-actions">
+          {% if a.customer_phone %}
+          <a class="btn btn-wpp" href="https://wa.me/{{ a.customer_phone|replace(' ','')|replace('-','')|replace('(','')|replace(')','') }}?text=Olá {{ a.customer_name.split(' ')[0] }}, confirmamos seu horário às {{ a.start_time[:5] }}! ✂️" target="_blank">📱</a>
+          {% endif %}
+          <button class="btn btn-ok" onclick="setStatus({{ a.id }},'completed')">✓</button>
+          <button class="btn btn-no" onclick="setStatus({{ a.id }},'cancelled')">✕</button>
+        </div>
+      </div>
+      {% endfor %}
+    {% endif %}
+    {% if today_appts|selectattr('status','equalto','completed')|list|length > 0 %}
+    <div class="section-title">Concluídos hoje</div>
+    {% for a in today_appts if a.status == 'completed' %}
+    <div class="appt-card" style="opacity:0.6;">
+      <div class="appt-time">{{ a.start_time[:5] }}</div>
+      <div class="appt-info"><div class="name">{{ a.customer_name }}</div><div class="detail">{{ a.service_name }}</div></div>
+      <span class="badge-completed">✓ Feito</span>
+    </div>
+    {% endfor %}
+    {% endif %}
+  </div>
+
+  <!-- ABA: SERVIÇOS -->
+  <div class="page" id="page-servicos">
+    <div class="section-title">Serviços & Preços</div>
+    {% for s in services %}
+    <div class="item-row">
+      <div><div class="name">{{ s.name }}</div><div class="sub">{{ s.duration_min }} min · {{ s.category }}</div></div>
+      <div class="price">R$ {{ "%.2f"|format(s.price) }}</div>
+    </div>
+    {% endfor %}
+    <a href="/admin/servicos" class="menu-item" style="margin-top:16px;"><span class="icon">✏️</span><span class="txt"><h4>Editar serviços e preços</h4><p>Abrir painel completo</p></span></a>
+  </div>
+
+  <!-- ABA: PRODUTOS -->
+  <div class="page" id="page-produtos">
+    <div class="section-title">Produtos & Estoque</div>
+    {% for p in products %}
+    <div class="item-row">
+      <div><div class="name">{{ p.name }}</div><div class="sub">{{ p.category }} · Estoque: {{ p.stock }}</div></div>
+      <div class="price">R$ {{ "%.2f"|format(p.price) }}</div>
+    </div>
+    {% endfor %}
+    <a href="/admin/produtos" class="menu-item" style="margin-top:16px;"><span class="icon">✏️</span><span class="txt"><h4>Gerenciar produtos</h4><p>Adicionar, editar, controlar estoque</p></span></a>
+  </div>
+
+  <!-- ABA: MAIS -->
+  <div class="page" id="page-mais">
+    <div class="install-tip">💡 Dica: adicione este app à tela inicial (3 pontinhos → "Adicionar à tela inicial") para usar como aplicativo!</div>
+    <div class="section-title">Ações rápidas</div>
+    <a href="/agendar" class="menu-item"><span class="icon">📅</span><span class="txt"><h4>Agendar para cliente</h4><p>Marcar horário manualmente</p></span></a>
+    <a href="/admin/agenda" class="menu-item"><span class="icon">📆</span><span class="txt"><h4>Agenda completa</h4><p>Ver outros dias</p></span></a>
+    <a href="/admin/pedidos" class="menu-item"><span class="icon">📦</span><span class="txt"><h4>Pedidos da loja</h4><p>Acompanhar vendas online</p></span></a>
+    <a href="/admin/portfolio" class="menu-item"><span class="icon">📸</span><span class="txt"><h4>Portfólio</h4><p>Gerenciar fotos dos cortes</p></span></a>
+    <a href="/admin/configuracoes" class="menu-item"><span class="icon">⚙️</span><span class="txt"><h4>Configurações</h4><p>Nome, logo, cores, calendário, WhatsApp</p></span></a>
+    <a href="/" target="_blank" class="menu-item"><span class="icon">🌐</span><span class="txt"><h4>Ver site do cliente</h4><p>Abrir página pública</p></span></a>
+    <a href="/logout" class="menu-item" style="color:#e74c3c;"><span class="icon">🚪</span><span class="txt"><h4>Sair</h4><p>Encerrar sessão</p></span></a>
+  </div>
+
+  <!-- Bottom navigation -->
+  <nav class="bottom-nav">
+    <button class="nav-btn active" data-page="agenda" onclick="showPage('agenda',this)"><span class="icon">📅</span>Agenda</button>
+    <button class="nav-btn" data-page="servicos" onclick="showPage('servicos',this)"><span class="icon">✂️</span>Serviços</button>
+    <button class="nav-btn" data-page="produtos" onclick="showPage('produtos',this)"><span class="icon">🛍️</span>Produtos</button>
+    <button class="nav-btn" data-page="mais" onclick="showPage('mais',this)"><span class="icon">⋯</span>Mais</button>
+  </nav>
+
+<script>
+function showPage(name, btn) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  window.scrollTo(0,0);
+}
+async function setStatus(id, status) {
+  await fetch('/admin/agenda/status', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({appointment_id: id, status: status})
+  });
+  const el = document.getElementById('apt-'+id);
+  if (el) el.style.opacity = '0.4';
+  setTimeout(() => location.reload(), 600);
+}
+// Registra service worker para PWA
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/static/sw.js').catch(()=>{});
+}
+</script>
+</body>
+</html>

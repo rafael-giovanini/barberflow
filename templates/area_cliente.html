@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Minha Área — Barbearia{% endblock %}
+{% block content %}
+<section class="section container" style="max-width:900px;">
+  <h2 class="section-title">Olá, {{ user.name }}!</h2>
+  <p class="section-sub">Acompanhe seus agendamentos e pedidos</p>
+
+  <div class="flex mb-4" style="justify-content:center;">
+    <a href="/agendar" class="btn btn-dourado btn-sm">+ Novo Agendamento</a>
+    <a href="/loja" class="btn btn-outline btn-sm">Ir para Loja</a>
+  </div>
+
+  <h3 style="color:var(--dourado); margin: 24px 0 16px; text-transform:uppercase; letter-spacing:1px;">Meus Agendamentos</h3>
+  {% if not appointments %}
+  <p class="text-muted text-center">Nenhum agendamento ainda. <a href="/agendar">Agende agora!</a></p>
+  {% else %}
+    {% for a in appointments %}
+    <div class="appt-item">
+      <div class="appt-time">{{ a.start_time }}</div>
+      <div class="appt-info">
+        <div class="name">{{ a.service_name }} — {{ a.barber_name }}</div>
+        <div class="detail">
+          {% set parts = a.appointment_date.split('-') %}
+          {{ parts[2] }}/{{ parts[1] }}/{{ parts[0] }} · R$ {{ "%.2f"|format(a.service_price) }}
+          {% if a.notes %} · Obs: {{ a.notes }}{% endif %}
+        </div>
+      </div>
+      <span class="badge badge-{{ a.status }}">{{ a.status }}</span>
+    </div>
+    {% endfor %}
+  {% endif %}
+
+  <h3 style="color:var(--dourado); margin: 32px 0 16px; text-transform:uppercase; letter-spacing:1px;">Meus Pedidos</h3>
+  {% if not orders %}
+  <p class="text-muted text-center">Nenhum pedido na loja ainda.</p>
+  {% else %}
+    {% for o in orders %}
+    <div class="appt-item">
+      <div class="appt-info">
+        <div class="name">Pedido #{{ o.id }} — R$ {{ "%.2f"|format(o.total) }}</div>
+        <div class="detail">{{ o.created_at }} · {{ o.payment_method }} · {{ o.address }}</div>
+      </div>
+      <span class="badge badge-{{ o.status }}">{{ o.status }}</span>
+    </div>
+    {% endfor %}
+  {% endif %}
+</section>
+{% endblock %}

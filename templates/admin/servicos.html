@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Serviços — Painel do Barbeiro{% endblock %}
+{% block content %}
+<div class="admin-layout">
+  <aside class="admin-sidebar">
+    <a href="/admin">📊 Dashboard</a>
+    <a href="/admin/agenda">📅 Agenda</a>
+    <a href="/admin/servicos" class="active">✂️ Serviços</a>
+    <a href="/admin/produtos">🛍️ Produtos</a>
+    <a href="/admin/portfolio">📸 Portfólio</a>
+    <a href="/admin/barbeiros">👤 Barbeiros</a>
+    <a href="/admin/pedidos">📦 Pedidos</a>
+    <a href="/app" target="_blank">📱 App Mobile</a>
+    <a href="/admin/configuracoes">⚙️ Configurações</a>
+    <a href="/">🌐 Ver Site</a>
+    <a href="/logout">🚪 Sair</a>
+  </aside>
+
+  <div class="admin-content">
+    <h1>Gerenciar Serviços</h1>
+
+    <button class="btn btn-dourado btn-sm mb-4" onclick="openModal()">+ Novo Serviço</button>
+
+    <table class="admin-table">
+      <thead>
+        <tr><th>Nome</th><th>Categoria</th><th>Preço</th><th>Duração</th><th>Ações</th></tr>
+      </thead>
+      <tbody>
+        {% for s in services %}
+        <tr>
+          <td><strong>{{ s.name }}</strong><br><small class="text-muted">{{ s.description[:50] }}</small></td>
+          <td>{{ s.category }}</td>
+          <td class="text-dourado">R$ {{ "%.2f"|format(s.price) }}</td>
+          <td>{{ s.duration_min }} min</td>
+          <td>
+            <button class="btn btn-outline btn-sm" onclick='editService({{ s|tojson }})'>Editar</button>
+            <form method="POST" action="/admin/servicos/excluir" style="display:inline;" onsubmit="return confirm('Desativar este serviço?')">
+              <input type="hidden" name="service_id" value="{{ s.id }}">
+              <button class="btn btn-danger btn-sm" type="submit">{% if s.active %}Desativar{% else %}Ativar{% endif %}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Modal de adicionar/editar serviço -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <h3 id="modal-title">Novo Serviço</h3>
+    <form method="POST" action="/admin/servicos/salvar">
+      <input type="hidden" name="service_id" id="f_id">
+      <div class="form-group">
+        <label>Nome do serviço</label>
+        <input type="text" name="name" id="f_name" class="form-control" required>
+      </div>
+      <div class="form-group">
+        <label>Descrição</label>
+        <textarea name="description" id="f_desc" class="form-control" rows="2"></textarea>
+      </div>
+      <div class="flex">
+        <div class="form-group" style="flex:1;">
+          <label>Preço (R$)</label>
+          <input type="number" step="0.01" name="price" id="f_price" class="form-control" required>
+        </div>
+        <div class="form-group" style="flex:1;">
+          <label>Duração (min)</label>
+          <input type="number" name="duration_min" id="f_dur" class="form-control" value="30" required>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Categoria</label>
+        <select name="category" id="f_cat" class="form-control">
+          <option>Cabelo</option><option>Barba</option><option>Combo</option>
+          <option>Acabamento</option><option>Tratamento</option><option>Infantil</option>
+        </select>
+      </div>
+      <button type="submit" class="btn btn-dourado btn-block">Salvar</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function openModal() {
+  document.getElementById('modal-title').textContent = 'Novo Serviço';
+  document.getElementById('f_id').value = '';
+  document.getElementById('f_name').value = '';
+  document.getElementById('f_desc').value = '';
+  document.getElementById('f_price').value = '';
+  document.getElementById('f_dur').value = '30';
+  document.getElementById('modal').classList.add('open');
+}
+function closeModal() { document.getElementById('modal').classList.remove('open'); }
+function editService(s) {
+  document.getElementById('modal-title').textContent = 'Editar Serviço';
+  document.getElementById('f_id').value = s.id;
+  document.getElementById('f_name').value = s.name;
+  document.getElementById('f_desc').value = s.description || '';
+  document.getElementById('f_price').value = s.price;
+  document.getElementById('f_dur').value = s.duration_min;
+  document.getElementById('f_cat').value = s.category;
+  document.getElementById('modal').classList.add('open');
+}
+document.getElementById('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+</script>
+{% endblock %}

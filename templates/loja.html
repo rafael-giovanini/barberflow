@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Loja Online — Produtos de Barbearia{% endblock %}
+{% block content %}
+<section class="section container">
+  <h2 class="section-title">Loja Online</h2>
+  <p class="section-sub">Produtos premium para manter o visual em dia</p>
+
+  <div class="filter-tabs">
+    <button class="filter-tab active" data-filter="todos">Todos</button>
+    {% for cat in categories %}
+    <button class="filter-tab" data-filter="{{ cat }}">{{ cat }}</button>
+    {% endfor %}
+  </div>
+
+  <div class="grid grid-4" id="store-grid">
+    {% for p in products %}
+    <div class="card product-item" data-category="{{ p.category }}">
+      <img src="{{ p.image_url }}" alt="{{ p.name }}" class="card-img" style="height:180px;" loading="lazy"
+           onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 400 300%22><rect fill=%22%232a2a2a%22 width=%22400%22 height=%22300%22/><text x=%22200%22 y=%22150%22 fill=%22%23c9a227%22 text-anchor=%22middle%22 font-size=%2218%22>{{ p.name }}</text></svg>'">
+      <div class="card-body">
+        <span class="category-badge">{{ p.category }}</span>
+        <h3 class="card-title" style="font-size:0.95rem;">{{ p.name }}</h3>
+        <p class="card-desc" style="font-size:0.8rem;">{{ p.description[:80] }}{% if p.description|length > 80 %}...{% endif %}</p>
+        <div class="flex-between mt-2">
+          <span class="card-price" style="font-size:1.1rem;">R$ {{ "%.2f"|format(p.price) }}</span>
+          {% if p.stock > 0 %}
+          <button class="btn btn-dourado btn-sm" onclick="addToCart({{ p.id }})">+ Carrinho</button>
+          {% else %}
+          <span class="text-danger" style="font-size:0.8rem;">Esgotado</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="text-center mt-4">
+    <a href="/carrinho" class="btn btn-outline">Ver Carrinho (<span id="cart-count-nav">{{ cart_count }}</span>)</a>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+async function addToCart(productId) {
+  const res = await fetch('/api/carrinho/add', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({product_id: productId, qty: 1})
+  });
+  const data = await res.json();
+  if (data.ok) {
+    showToast('Adicionado ao carrinho!', 'success');
+    document.getElementById('cart-count-nav').textContent = data.cart_count;
+  }
+}
+document.querySelectorAll('.filter-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const f = btn.dataset.filter;
+    document.querySelectorAll('.product-item').forEach(i => {
+      i.style.display = (f==='todos' || i.dataset.category===f) ? '' : 'none';
+    });
+  });
+});
+</script>
+{% endblock %}

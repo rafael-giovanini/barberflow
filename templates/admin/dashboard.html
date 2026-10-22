@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Painel do Barbeiro{% endblock %}
+{% block content %}
+<div class="admin-layout">
+  <aside class="admin-sidebar">
+    <a href="/admin" class="active">📊 Dashboard</a>
+    <a href="/admin/agenda">📅 Agenda</a>
+    <a href="/admin/servicos">✂️ Serviços</a>
+    <a href="/admin/produtos">🛍️ Produtos</a>
+    <a href="/admin/portfolio">📸 Portfólio</a>
+    <a href="/admin/barbeiros">👤 Barbeiros</a>
+    <a href="/admin/pedidos">📦 Pedidos</a>
+    <a href="/app" target="_blank">📱 App Mobile</a>
+    <a href="/admin/configuracoes">⚙️ Configurações</a>
+    <a href="/">🌐 Ver Site</a>
+    <a href="/logout">🚪 Sair</a>
+  </aside>
+
+  <div class="admin-content">
+    <h1>Painel do Barbeiro</h1>
+    <p class="text-muted mb-4">Olá, {{ user.name }}! Hoje é {{ today }}.</p>
+
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-value">{{ today_appts|length }}</div>
+        <div class="stat-label">Agendamentos Hoje</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">R$ {{ "%.2f"|format(total_valor) }}</div>
+        <div class="stat-label">Faturamento Hoje</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">{{ pending_orders }}</div>
+        <div class="stat-label">Pedidos na Loja</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">{{ total_services }}</div>
+        <div class="stat-label">Serviços Ativos</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">{{ total_products }}</div>
+        <div class="stat-label">Produtos na Loja</div>
+      </div>
+    </div>
+
+    <h3 style="color:var(--dourado); margin-bottom:16px; text-transform:uppercase; letter-spacing:1px; font-size:1.1rem;">Agendamentos de Hoje</h3>
+    {% if not today_appts %}
+    <p class="text-muted">Nenhum agendamento para hoje. Aproveite para organizar a loja!</p>
+    {% else %}
+      {% for a in today_appts %}
+      <div class="appt-item">
+        <div class="appt-time">{{ a.start_time }}</div>
+        <div class="appt-info">
+          <div class="name">{{ a.customer_name }}</div>
+          <div class="detail">{{ a.service_name }} · {{ a.customer_phone }}{% if a.notes %} · {{ a.notes }}{% endif %}</div>
+        </div>
+        <div class="appt-actions">
+          <button class="btn btn-success btn-sm" onclick="updateStatus({{ a.id }}, 'completed')">✓ Feito</button>
+          <button class="btn btn-danger btn-sm" onclick="updateStatus({{ a.id }}, 'cancelled')">✕ Cancelar</button>
+        </div>
+      </div>
+      {% endfor %}
+    {% endif %}
+
+    <div class="mt-4 flex">
+      <a href="/admin/agenda" class="btn btn-outline btn-sm">Ver agenda completa</a>
+      <a href="/agendar" class="btn btn-dourado btn-sm">+ Agendar para cliente</a>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function updateStatus(id, status) {
+  await fetch('/admin/agenda/status', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({appointment_id: id, status: status})
+  });
+  showToast(status === 'completed' ? 'Marcado como concluído!' : 'Agendamento cancelado.', 'success');
+  setTimeout(() => location.reload(), 800);
+}
+</script>
+{% endblock %}

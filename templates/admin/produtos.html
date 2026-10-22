@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Produtos — Painel do Barbeiro{% endblock %}
+{% block content %}
+<div class="admin-layout">
+  <aside class="admin-sidebar">
+    <a href="/admin">📊 Dashboard</a>
+    <a href="/admin/agenda">📅 Agenda</a>
+    <a href="/admin/servicos">✂️ Serviços</a>
+    <a href="/admin/produtos" class="active">🛍️ Produtos</a>
+    <a href="/admin/portfolio">📸 Portfólio</a>
+    <a href="/admin/barbeiros">👤 Barbeiros</a>
+    <a href="/admin/pedidos">📦 Pedidos</a>
+    <a href="/app" target="_blank">📱 App Mobile</a>
+    <a href="/admin/configuracoes">⚙️ Configurações</a>
+    <a href="/">🌐 Ver Site</a>
+    <a href="/logout">🚪 Sair</a>
+  </aside>
+
+  <div class="admin-content">
+    <h1>Gerenciar Produtos da Loja</h1>
+
+    <button class="btn btn-dourado btn-sm mb-4" onclick="openModal()">+ Novo Produto</button>
+
+    <table class="admin-table">
+      <thead>
+        <tr><th>Produto</th><th>Categoria</th><th>Preço</th><th>Estoque</th><th>Ações</th></tr>
+      </thead>
+      <tbody>
+        {% for p in products %}
+        <tr>
+          <td><strong>{{ p.name }}</strong><br><small class="text-muted">{{ p.description[:40] }}</small></td>
+          <td>{{ p.category }}</td>
+          <td class="text-dourado">R$ {{ "%.2f"|format(p.price) }}</td>
+          <td>{% if p.stock <= 3 %}<span class="text-danger">{{ p.stock }}</span>{% else %}{{ p.stock }}{% endif %}</td>
+          <td>
+            <button class="btn btn-outline btn-sm" onclick='editProduct({{ p|tojson }})'>Editar</button>
+            <form method="POST" action="/admin/produtos/excluir" style="display:inline;" onsubmit="return confirm('Remover produto da loja?')">
+              <input type="hidden" name="product_id" value="{{ p.id }}">
+              <button class="btn btn-danger btn-sm" type="submit">Remover</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <h3 id="modal-title">Novo Produto</h3>
+    <form method="POST" action="/admin/produtos/salvar">
+      <input type="hidden" name="product_id" id="f_id">
+      <div class="form-group">
+        <label>Nome do produto</label>
+        <input type="text" name="name" id="f_name" class="form-control" required>
+      </div>
+      <div class="form-group">
+        <label>Descrição</label>
+        <textarea name="description" id="f_desc" class="form-control" rows="2"></textarea>
+      </div>
+      <div class="flex">
+        <div class="form-group" style="flex:1;">
+          <label>Preço (R$)</label>
+          <input type="number" step="0.01" name="price" id="f_price" class="form-control" required>
+        </div>
+        <div class="form-group" style="flex:1;">
+          <label>Estoque</label>
+          <input type="number" name="stock" id="f_stock" class="form-control" value="10" required>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Categoria</label>
+        <select name="category" id="f_cat" class="form-control">
+          <option>Modelagem</option><option>Barba</option><option>Cabelo</option>
+          <option>Kit</option><option>Geral</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>URL da imagem (opcional)</label>
+        <input type="url" name="image_url" id="f_img" class="form-control" placeholder="https://...">
+      </div>
+      <button type="submit" class="btn btn-dourado btn-block">Salvar</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function openModal() {
+  document.getElementById('modal-title').textContent = 'Novo Produto';
+  ['f_id','f_name','f_desc','f_price','f_img'].forEach(i => document.getElementById(i).value = '');
+  document.getElementById('f_stock').value = '10';
+  document.getElementById('modal').classList.add('open');
+}
+function closeModal() { document.getElementById('modal').classList.remove('open'); }
+function editProduct(p) {
+  document.getElementById('modal-title').textContent = 'Editar Produto';
+  document.getElementById('f_id').value = p.id;
+  document.getElementById('f_name').value = p.name;
+  document.getElementById('f_desc').value = p.description || '';
+  document.getElementById('f_price').value = p.price;
+  document.getElementById('f_stock').value = p.stock;
+  document.getElementById('f_cat').value = p.category;
+  document.getElementById('f_img').value = p.image_url || '';
+  document.getElementById('modal').classList.add('open');
+}
+document.getElementById('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+</script>
+{% endblock %}

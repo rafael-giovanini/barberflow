@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Carrinho — Loja Barbearia{% endblock %}
+{% block content %}
+<section class="section container" style="max-width:900px;">
+  <h2 class="section-title">Seu Carrinho</h2>
+
+  {% if not items %}
+  <div class="text-center mt-4">
+    <p class="text-muted mb-2">Seu carrinho está vazio.</p>
+    <a href="/loja" class="btn btn-dourado">Ver Produtos</a>
+  </div>
+  {% else %}
+
+  <div id="cart-items">
+    {% for item in items %}
+    <div class="cart-item" id="item-{{ item.product.id }}">
+      <img src="{{ item.product.image_url }}" alt="{{ item.product.name }}"
+           onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect fill=%22%232a2a2a%22 width=%22100%22 height=%22100%22/></svg>'">
+      <div class="cart-item-info">
+        <h4>{{ item.product.name }}</h4>
+        <p>R$ {{ "%.2f"|format(item.product.price) }} cada</p>
+      </div>
+      <div class="qty-control">
+        <button class="qty-btn" onclick="updateQty({{ item.product.id }}, {{ item.qty - 1 }})">−</button>
+        <span id="qty-{{ item.product.id }}">{{ item.qty }}</span>
+        <button class="qty-btn" onclick="updateQty({{ item.product.id }}, {{ item.qty + 1 }})">+</button>
+      </div>
+      <strong class="text-dourado" id="subtotal-{{ item.product.id }}">R$ {{ "%.2f"|format(item.subtotal) }}</strong>
+      <button class="qty-btn" style="color:var(--vermelho);" onclick="removeItem({{ item.product.id }})">✕</button>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="cart-summary">
+    <div class="flex-between mb-2">
+      <span class="text-muted">Subtotal</span>
+      <strong id="cart-total">R$ {{ "%.2f"|format(total) }}</strong>
+    </div>
+    <div class="flex-between mb-2">
+      <span class="text-muted">Frete</span>
+      <span class="text-success">Grátis</span>
+    </div>
+    <div class="total" id="cart-total-big">R$ {{ "%.2f"|format(total) }}</div>
+  </div>
+
+  <div class="card mt-2" style="padding:24px;">
+    <h3 style="color:var(--dourado); margin-bottom:16px;">Dados para entrega</h3>
+    <form method="POST" action="/finalizar-pedido">
+      <div class="form-group">
+        <label>Nome completo</label>
+        <input type="text" name="customer_name" class="form-control" required value="{{ user.name if user else '' }}">
+      </div>
+      <div class="form-group">
+        <label>Telefone / WhatsApp</label>
+        <input type="tel" name="customer_phone" class="form-control" required value="{{ user.phone if user else '' }}">
+      </div>
+      <div class="form-group">
+        <label>Endereço completo (ou retirar na loja)</label>
+        <textarea name="address" class="form-control" rows="2" required placeholder="Rua, número, bairro, cidade - OU 'Retirar na loja'"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Forma de pagamento</label>
+        <select name="payment_method" class="form-control">
+          <option value="pix">PIX (na entrega)</option>
+          <option value="dinheiro">Dinheiro (na entrega)</option>
+          <option value="cartao">Cartão (na entrega)</option>
+          <option value="retirar">Retirar na loja — pagar na hora</option>
+        </select>
+      </div>
+      <button type="submit" class="btn btn-dourado btn-block">Finalizar Pedido</button>
+    </form>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+async function updateQty(productId, qty) {
+  if (qty <= 0) { removeItem(productId); return; }
+  await fetch('/api/carrinho/update', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({product_id: productId, qty: qty})
+  });
+  location.reload();
+}
+async function removeItem(productId) {
+  await fetch('/api/carrinho/remove', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({product_id: productId})
+  });
+  location.reload();
+}
+</script>
+{% endblock %}

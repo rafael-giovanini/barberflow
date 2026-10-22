@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Barbearia Premium{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  {% set s = request.state.settings %}
+  <style>
+    :root {
+      --dourado: {{ s.color_primary }};
+      --dourado-claro: {{ s.color_primary_light }};
+      --preto: {{ s.color_bg }};
+      --preto-claro: {{ s.color_card }};
+      --branco: {{ s.color_text }};
+    }
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-inner">
+      <a href="/" class="logo">
+        {% if s.logo_url %}
+          <img src="{{ s.logo_url }}" alt="{{ s.shop_name }}" style="height:36px; vertical-align:middle;">
+        {% else %}
+          {{ s.shop_name[:6] }}<span>{{ s.shop_name[6:] if s.shop_name|length > 6 else '' }}</span>
+        {% endif %}
+      </a>
+      <button class="nav-toggle" onclick="document.querySelector('.nav-links').classList.toggle('open')">&#9776;</button>
+      <ul class="nav-links">
+        <li><a href="/">Início</a></li>
+        <li><a href="/servicos">Serviços</a></li>
+        <li><a href="/portfolio">Portfólio</a></li>
+        <li><a href="/agendar">Agendar</a></li>
+        <li><a href="/loja">Loja{% if cart_count and cart_count > 0 %} <span class="cart-badge">{{ cart_count }}</span>{% endif %}</a></li>
+        {% if user %}
+          {% if user.role in ['admin', 'barber'] %}
+            <li><a href="/admin">Painel</a></li>
+          {% else %}
+            <li><a href="/area-cliente">Minha Área</a></li>
+          {% endif %}
+          <li><a href="/logout">Sair</a></li>
+        {% else %}
+          <li><a href="/login">Entrar</a></li>
+        {% endif %}
+      </ul>
+    </div>
+  </nav>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <span class="logo">
+      {% if s.logo_url %}
+        <img src="{{ s.logo_url }}" alt="{{ s.shop_name }}" style="height:30px;">
+      {% else %}
+        {{ s.shop_name[:6] }}<span>{{ s.shop_name[6:] if s.shop_name|length > 6 else '' }}</span>
+      {% endif %}
+    </span>
+    <p>{{ s.shop_slogan }}</p>
+    {% if s.address %}<p style="font-size:0.85rem;">{{ s.address }}</p>{% endif %}
+    {% if s.whatsapp or s.instagram %}
+    <p style="margin-top:8px;font-size:0.85rem;">
+      {% if s.whatsapp %}<a href="https://wa.me/{{ s.whatsapp|replace(' ','')|replace('-','')|replace('(','')|replace(')','') }}" target="_blank">WhatsApp</a>{% endif %}
+      {% if s.whatsapp and s.instagram %} · {% endif %}
+      {% if s.instagram %}<a href="https://instagram.com/{{ s.instagram|replace('@','') }}" target="_blank">Instagram: @{{ s.instagram|replace('@','') }}</a>{% endif %}
+    </p>
+    {% endif %}
+    <p style="margin-top:8px;font-size:0.85rem;">{{ s.shop_name }} &copy; 2024 — Todos os direitos reservados</p>
+  </footer>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    function showToast(msg, type='') {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.className = 'toast show ' + type;
+      setTimeout(() => t.classList.remove('show'), 3000);
+    }
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

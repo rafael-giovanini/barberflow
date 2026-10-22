@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Barbearia Premium — Corte, Barba & Estilo{% endblock %}
+{% block content %}
+
+<section class="hero">
+  <h1>ESTILO QUE <span class="dourado">COMANDA</span></h1>
+  <p>Cortes precisos, barba feita com navalha e produtos premium. Agende seu horário agora mesmo e saia transformado.</p>
+  <div class="flex" style="justify-content:center;">
+    <a href="/agendar" class="btn btn-dourado">Agendar Horário</a>
+    <a href="/servicos" class="btn btn-outline">Ver Serviços</a>
+  </div>
+</section>
+
+<!-- Serviços em destaque -->
+<section class="section container">
+  <h2 class="section-title">Nossos Serviços</h2>
+  <p class="section-sub">Qualidade premium, preços justos</p>
+  <div class="grid grid-3">
+    {% for s in services[:6] %}
+    <div class="card">
+      <div class="card-body">
+        <span class="category-badge">{{ s.category }}</span>
+        <h3 class="card-title">{{ s.name }}</h3>
+        <p class="card-desc">{{ s.description }}</p>
+        <div class="flex-between">
+          <span class="card-price">R$ {{ "%.2f"|format(s.price) }}</span>
+          <span class="text-muted">{{ s.duration_min }} min</span>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="text-center mt-4">
+    <a href="/servicos" class="btn btn-outline btn-sm">Ver todos os serviços</a>
+  </div>
+</section>
+
+<!-- Portfólio -->
+<section class="section" style="background:var(--preto-claro);">
+  <div class="container">
+    <h2 class="section-title">Portfólio de Cortes</h2>
+    <p class="section-sub">Confira nossos modelos e encontre o seu estilo</p>
+    <div class="grid grid-3">
+      {% for p in portfolio %}
+      <div class="card portfolio-card">
+        <img src="{{ p.image_url }}" alt="{{ p.name }}" class="card-img" loading="lazy"
+             onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 400 300%22><rect fill=%22%232a2a2a%22 width=%22400%22 height=%22300%22/><text x=%22200%22 y=%22150%22 fill=%22%23c9a227%22 text-anchor=%22middle%22 font-size=%2220%22>BarberShop</text></svg>'">
+        <div class="portfolio-overlay">
+          <span class="category-badge">{{ p.category }}</span>
+          <h3 class="card-title" style="color:white;">{{ p.name }}</h3>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="text-center mt-4">
+      <a href="/portfolio" class="btn btn-outline btn-sm">Ver portfólio completo</a>
+    </div>
+  </div>
+</section>
+
+<!-- Loja -->
+<section class="section container">
+  <h2 class="section-title">Produtos Premium</h2>
+  <p class="section-sub">Cuide do seu visual em casa com os melhores produtos</p>
+  <div class="grid grid-4">
+    {% for p in products %}
+    <div class="card">
+      <img src="{{ p.image_url }}" alt="{{ p.name }}" class="card-img" style="height:160px;" loading="lazy"
+           onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 400 300%22><rect fill=%22%232a2a2a%22 width=%22400%22 height=%22300%22/><text x=%22200%22 y=%22150%22 fill=%22%23c9a227%22 text-anchor=%22middle%22 font-size=%2220%22>Produto</text></svg>'">
+      <div class="card-body">
+        <h3 class="card-title" style="font-size:1rem;">{{ p.name }}</h3>
+        <span class="card-price" style="font-size:1.1rem;">R$ {{ "%.2f"|format(p.price) }}</span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="text-center mt-4">
+    <a href="/loja" class="btn btn-dourado btn-sm">Visitar Loja</a>
+  </div>
+</section>
+
+{% endblock %}

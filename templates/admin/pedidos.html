@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Pedidos da Loja — Painel{% endblock %}
+{% block content %}
+<div class="admin-layout">
+  <aside class="admin-sidebar">
+    <a href="/admin">📊 Dashboard</a>
+    <a href="/admin/agenda">📅 Agenda</a>
+    <a href="/admin/servicos">✂️ Serviços</a>
+    <a href="/admin/produtos">🛍️ Produtos</a>
+    <a href="/admin/portfolio">📸 Portfólio</a>
+    <a href="/admin/barbeiros">👤 Barbeiros</a>
+    <a href="/admin/pedidos" class="active">📦 Pedidos</a>
+    <a href="/app" target="_blank">📱 App Mobile</a>
+    <a href="/admin/configuracoes">⚙️ Configurações</a>
+    <a href="/">🌐 Ver Site</a>
+    <a href="/logout">🚪 Sair</a>
+  </aside>
+
+  <div class="admin-content">
+    <h1>Pedidos da Loja Online</h1>
+
+    {% if not orders %}
+    <p class="text-muted">Nenhum pedido ainda.</p>
+    {% else %}
+    <table class="admin-table">
+      <thead>
+        <tr><th>Pedido</th><th>Cliente</th><th>Itens</th><th>Total</th><th>Entrega</th><th>Pagamento</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {% for o in orders %}
+        <tr>
+          <td><strong>#{{ o.id }}</strong><br><small class="text-muted">{{ o.created_at[:16] }}</small></td>
+          <td>{{ o.customer_name }}<br><small class="text-muted">{{ o.customer_phone }}</small></td>
+          <td style="max-width:200px;"><small>{{ o.items_summary }}</small></td>
+          <td class="text-dourado">R$ {{ "%.2f"|format(o.total) }}</td>
+          <td><small>{{ o.address }}</small></td>
+          <td><small>{{ o.payment_method }}</small></td>
+          <td><span class="badge badge-{{ o.status }}">{{ o.status }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

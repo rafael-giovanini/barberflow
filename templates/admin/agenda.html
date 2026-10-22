@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Agenda — Painel do Barbeiro{% endblock %}
+{% block content %}
+<div class="admin-layout">
+  <aside class="admin-sidebar">
+    <a href="/admin">📊 Dashboard</a>
+    <a href="/admin/agenda" class="active">📅 Agenda</a>
+    <a href="/admin/servicos">✂️ Serviços</a>
+    <a href="/admin/produtos">🛍️ Produtos</a>
+    <a href="/admin/portfolio">📸 Portfólio</a>
+    <a href="/admin/barbeiros">👤 Barbeiros</a>
+    <a href="/admin/pedidos">📦 Pedidos</a>
+    <a href="/app" target="_blank">📱 App Mobile</a>
+    <a href="/admin/configuracoes">⚙️ Configurações</a>
+    <a href="/">🌐 Ver Site</a>
+    <a href="/logout">🚪 Sair</a>
+  </aside>
+
+  <div class="admin-content">
+    <h1>Agenda</h1>
+    <form method="GET" class="flex mb-4">
+      <input type="date" name="date" value="{{ date }}" class="form-control" style="max-width:200px;" onchange="this.form.submit()">
+    </form>
+
+    {% if not appts %}
+    <p class="text-muted">Nenhum agendamento nesta data.</p>
+    {% else %}
+      {% for a in appts %}
+      <div class="appt-item">
+        <div class="appt-time">{{ a.start_time }}<br><small style="font-size:0.7rem;color:var(--cinza-texto);">{{ a.end_time }}</small></div>
+        <div class="appt-info">
+          <div class="name">{{ a.customer_name }}</div>
+          <div class="detail">{{ a.service_name }} · R$ {{ "%.2f"|format(a.service_price) }} · {{ a.customer_phone }}</div>
+          {% if a.notes %}<div class="detail" style="color:var(--dourado-claro);">📝 {{ a.notes }}</div>{% endif %}
+        </div>
+        <span class="badge badge-{{ a.status }}">{{ a.status }}</span>
+        {% if a.status == 'scheduled' %}
+        <div class="appt-actions">
+          <button class="btn btn-success btn-sm" onclick="updateStatus({{ a.id }}, 'completed')">✓</button>
+          <button class="btn btn-danger btn-sm" onclick="updateStatus({{ a.id }}, 'cancelled')">✕</button>
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function updateStatus(id, status) {
+  await fetch('/admin/agenda/status', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({appointment_id: id, status: status})
+  });
+  location.reload();
+}
+</script>
+{% endblock %}

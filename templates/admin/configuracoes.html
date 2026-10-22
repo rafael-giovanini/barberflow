@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Configurações — Painel{% endblock %}
+{% block content %}
+<div class="admin-layout">
+  <aside class="admin-sidebar">
+    <a href="/admin">📊 Dashboard</a>
+    <a href="/admin/agenda">📅 Agenda</a>
+    <a href="/admin/servicos">✂️ Serviços</a>
+    <a href="/admin/produtos">🛍️ Produtos</a>
+    <a href="/admin/portfolio">📸 Portfólio</a>
+    <a href="/admin/barbeiros">👤 Barbeiros</a>
+    <a href="/admin/pedidos">📦 Pedidos</a>
+    <a href="/app" target="_blank">📱 App Mobile</a>
+    <a href="/admin/configuracoes" class="active">⚙️ Configurações</a>
+    <a href="/">🌐 Ver Site</a>
+    <a href="/logout">🚪 Sair</a>
+  </aside>
+
+  <div class="admin-content">
+    <h1>Configurações da Barbearia</h1>
+    <p class="text-muted mb-4">Personalize nome, logo e cores do seu sistema. Alterações aplicam-se imediatamente a todo o site.</p>
+
+    {% if request.query_params.get('salvo') %}
+    <div class="success-msg">✅ Configurações salvas! <a href="/" target="_blank">Ver o site</a></div>
+    {% endif %}
+
+    <!-- Temas prontos -->
+    <h3 style="color:var(--dourado); margin: 20px 0 12px; font-size:1rem; text-transform:uppercase; letter-spacing:1px;">🎨 Temas prontos (clique para aplicar)</h3>
+    <div class="flex mb-4" style="gap:10px; flex-wrap:wrap;">
+      <button class="btn btn-sm" style="background:#0f0f0f; color:#c9a227; border:2px solid #c9a227;" onclick="applyTheme('classic')">Preto & Dourado</button>
+      <button class="btn btn-sm" style="background:#ffffff; color:#1e3a8a; border:2px solid #1e3a8a;" onclick="applyTheme('blue')">Branco & Azul</button>
+      <button class="btn btn-sm" style="background:#1a1a2e; color:#e94560; border:2px solid #e94560;" onclick="applyTheme('red')">Escuro & Vermelho</button>
+      <button class="btn btn-sm" style="background:#f5f5f5; color:#2d6a4f; border:2px solid #2d6a4f;" onclick="applyTheme('green')">Claro & Verde</button>
+      <button class="btn btn-sm" style="background:#2d1b4e; color:#f0a500; border:2px solid #f0a500;" onclick="applyTheme('purple')">Roxo & Âmbar</button>
+    </div>
+
+    <form method="POST" action="/admin/configuracoes/salvar" class="card" style="padding:24px;">
+      <h3 style="color:var(--dourado); margin-bottom:16px;">Identidade</h3>
+      <div class="form-group">
+        <label>Nome da barbearia (ex: BARBERSHOP, CORTE & CIA)</label>
+        <input type="text" name="shop_name" class="form-control" value="{{ settings.shop_name }}" required>
+      </div>
+      <div class="form-group">
+        <label>Slogan / frase do rodapé</label>
+        <input type="text" name="shop_slogan" class="form-control" value="{{ settings.shop_slogan }}">
+      </div>
+      <div class="form-group">
+        <label>URL do logo (imagem) — deixe vazio para usar texto</label>
+        <input type="url" name="logo_url" class="form-control" value="{{ settings.logo_url }}" placeholder="https://seu-logo.png">
+        <small class="text-muted">Dica: hospede sua logo no Imgur (grátis) e cole o link aqui.</small>
+      </div>
+
+      <h3 style="color:var(--dourado); margin: 24px 0 16px; font-size:1rem; text-transform:uppercase; letter-spacing:1px;">Cores</h3>
+      <div class="grid grid-3" style="gap:16px;">
+        <div class="form-group">
+          <label>Cor primária (destaques, botões)</label>
+          <input type="color" name="color_primary" id="c_primary" value="{{ settings.color_primary }}" class="form-control" style="height:48px; padding:4px;">
+        </div>
+        <div class="form-group">
+          <label>Cor primária clara</label>
+          <input type="color" name="color_primary_light" id="c_primary_light" value="{{ settings.color_primary_light }}" class="form-control" style="height:48px; padding:4px;">
+        </div>
+        <div class="form-group">
+          <label>Cor do texto</label>
+          <input type="color" name="color_text" id="c_text" value="{{ settings.color_text }}" class="form-control" style="height:48px; padding:4px;">
+        </div>
+        <div class="form-group">
+          <label>Cor de fundo</label>
+          <input type="color" name="color_bg" id="c_bg" value="{{ settings.color_bg }}" class="form-control" style="height:48px; padding:4px;">
+        </div>
+        <div class="form-group">
+          <label>Cor dos cards / painéis</label>
+          <input type="color" name="color_card" id="c_card" value="{{ settings.color_card }}" class="form-control" style="height:48px; padding:4px;">
+        </div>
+      </div>
+
+      <h3 style="color:var(--dourado); margin: 24px 0 16px; font-size:1rem; text-transform:uppercase; letter-spacing:1px;">📅 Integração com Google / Apple Calendar</h3>
+      <div class="card" style="padding:16px; background:var(--preto); margin-bottom:16px;">
+        <p class="text-muted" style="font-size:0.85rem; margin-bottom:10px;">Copie o link abaixo e adicione como <strong>calendário por URL</strong>. Seus agendamentos aparecem automaticamente no Google Calendar E no app Calendário do iPhone/Mac.</p>
+        <div class="flex">
+          <input type="text" class="form-control" id="calendar-url" readonly value="{{ request.url.scheme }}://{{ request.url.hostname }}{% if request.url.port != 80 %}:{{ request.url.port }}{% endif %}/feed/agenda.ics?token={{ settings.calendar_token }}">
+          <button class="btn btn-dourado btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('calendar-url').value); showToast('Link copiado!');">Copiar</button>
+        </div>
+        <details style="margin-top:12px; font-size:0.8rem; color:var(--cinza-texto, #aaa);">
+          <summary style="cursor:pointer; color:var(--dourado);">📖 Como adicionar no Google Calendar / Apple (clique)</summary>
+          <div style="margin-top:8px; line-height:1.8;">
+            <strong>Google Calendar (computador):</strong> Vá em "Outros calendários" → "+" → "Por URL" → cole o link.<br>
+            <strong>iPhone / Mac (Apple):</strong> Ajustes → Calendário → Contas → Adicionar Conta → Outro → "Adicionar Calendário Inscrito" → cole o link.<br>
+            <strong>Android:</strong> Use o Google Calendar pelo computador para adicionar — depois sincroniza no celular.
+          </div>
+        </details>
+      </div>
+
+      <h3 style="color:var(--dourado); margin: 24px 0 16px; font-size:1rem; text-transform:uppercase; letter-spacing:1px;">📱 Notificações por WhatsApp</h3>
+      <div class="form-group">
+        <label>WhatsApp do barbeiro (recebe notificação de novo agendamento/pedido)</label>
+        <input type="text" name="whatsapp_notify" class="form-control" value="{{ settings.whatsapp_notify }}" placeholder="18999999999 (só números com DDI)">
+        <small class="text-muted">O sistema também gera botão "📱 Notificar cliente" em cada agendamento.</small>
+      </div>
+      <div class="form-group">
+        <label>URL da API de WhatsApp (opcional — para envio automático)</label>
+        <input type="url" name="whatsapp_api_url" class="form-control" value="{{ settings.whatsapp_api_url }}" placeholder="https://sua-evolution-api.com/message/send">
+        <small class="text-muted">Deixe vazio para não enviar automaticamente. Use Evolution API, Z-API ou similar. Formato esperado: POST com {number, text}.</small>
+      </div>
+
+      <h3 style="color:var(--dourado); margin: 24px 0 16px; font-size:1rem; text-transform:uppercase; letter-spacing:1px;">Contato (aparece no rodapé)</h3>
+      <div class="grid grid-3" style="gap:16px;">
+        <div class="form-group">
+          <label>WhatsApp (só números, com DDD)</label>
+          <input type="text" name="whatsapp" class="form-control" value="{{ settings.whatsapp }}" placeholder="18999999999">
+        </div>
+        <div class="form-group">
+          <label>Instagram (@usuario)</label>
+          <input type="text" name="instagram" class="form-control" value="{{ settings.instagram }}" placeholder="@sua_barbearia">
+        </div>
+        <div class="form-group">
+          <label>Endereço</label>
+          <input type="text" name="address" class="form-control" value="{{ settings.address }}" placeholder="Rua, número - Cidade">
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-dourado btn-block mt-2">💾 Salvar Configurações</button>
+    </form>
+
+    <div class="card mt-4" style="padding:20px; border-color:var(--dourado);">
+      <h4 style="color:var(--dourado); margin-bottom:8px;">💡 Dica para vender este sistema</h4>
+      <p class="text-muted" style="font-size:0.9rem;">Cada barbearia que comprar seu produto pode personalizar as cores e o logo <strong>sem tocar em código</strong> — essa tela é o grande diferencial. Mostre ela no seu vídeo de vendas!</p>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const themes = {
+  classic: {primary:'#c9a227', primary_light:'#e8c547', bg:'#0f0f0f', card:'#1a1a1a', text:'#f5f5f5'},
+  blue:    {primary:'#1e3a8a', primary_light:'#3b82f6', bg:'#ffffff', card:'#f3f4f6', text:'#111827'},
+  red:     {primary:'#e94560', primary_light:'#ff6b81', bg:'#1a1a2e', card:'#16213e', text:'#f5f5f5'},
+  green:   {primary:'#2d6a4f', primary_light:'#52b788', bg:'#f5f5f5', card:'#ffffff', text:'#1a1a1a'},
+  purple:  {primary:'#f0a500', primary_light:'#ffc93c', bg:'#2d1b4e', card:'#3d2b5e', text:'#f5f5f5'},
+};
+function applyTheme(name) {
+  const t = themes[name];
+  document.getElementById('c_primary').value = t.primary;
+  document.getElementById('c_primary_light').value = t.primary_light;
+  document.getElementById('c_bg').value = t.bg;
+  document.getElementById('c_card').value = t.card;
+  document.getElementById('c_text').value = t.text;
+  showToast('Tema "' + name + '" aplicado! Clique em Salvar.');
+}
+</script>
+{% endblock %}

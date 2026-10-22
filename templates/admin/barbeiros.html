@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Barbeiros — Painel{% endblock %}
+{% block content %}
+<div class="admin-layout">
+  <aside class="admin-sidebar">
+    <a href="/admin">📊 Dashboard</a>
+    <a href="/admin/agenda">📅 Agenda</a>
+    <a href="/admin/servicos">✂️ Serviços</a>
+    <a href="/admin/produtos">🛍️ Produtos</a>
+    <a href="/admin/portfolio">📸 Portfólio</a>
+    <a href="/admin/pedidos">📦 Pedidos</a>
+    <a href="/admin/barbeiros" class="active">👤 Barbeiros</a>
+    <a href="/app" target="_blank">📱 App Mobile</a>
+    <a href="/admin/configuracoes">⚙️ Configurações</a>
+    <a href="/">🌐 Ver Site</a>
+    <a href="/logout">🚪 Sair</a>
+  </aside>
+
+  <div class="admin-content">
+    <h1>Barbeiros</h1>
+    <p class="text-muted mb-4">Cadastre cada barbeiro — o cliente escolhe quem vai atendê-lo no agendamento. Cada um pode ter horário próprio.</p>
+
+    {% if request.query_params.get('salvo') %}<div class="success-msg">✅ Barbeiro salvo!</div>{% endif %}
+    {% if request.query_params.get('erro') %}<div class="error-msg">❌ Informe o nome do barbeiro.</div>{% endif %}
+
+    <button class="btn btn-dourado btn-sm mb-4" onclick="document.getElementById('modal').classList.add('open')">+ Adicionar Barbeiro</button>
+
+    <div class="grid grid-2">
+      {% for b in barbers %}
+      <div class="card" style="padding:20px; {% if not b.active %}opacity:0.5;{% endif %}">
+        <div class="flex" style="gap:14px; align-items:flex-start;">
+          {% if b.photo_url %}
+          <img src="{{ b.photo_url }}" style="width:60px;height:60px;border-radius:50%;object-fit:cover;" onerror="this.style.display='none'">
+          {% else %}
+          <div style="width:60px;height:60px;border-radius:50%;background:var(--dourado);color:var(--preto);display:flex;align-items:center;justify-content:center;font-size:1.5rem;font-weight:800;flex-shrink:0;">{{ b.name[0] }}</div>
+          {% endif %}
+          <div style="flex:1;">
+            <h3 style="color:var(--dourado); font-size:1.1rem;">{{ b.name }} {% if not b.active %}<span class="badge badge-cancelled">Inativo</span>{% endif %}</h3>
+            {% if b.bio %}<p class="text-muted" style="font-size:0.85rem; margin:4px 0;">{{ b.bio }}</p>{% endif %}
+            <p style="font-size:0.8rem; color:var(--cinza-texto, #aaa); margin-top:6px;">
+              ⏰ {{ b.work_start }}–{{ b.work_end }} · 🍽️ {{ b.lunch_start }}–{{ b.lunch_end }}<br>
+              📅 Dias: {% set dias = {1:'Seg',2:'Ter',3:'Qua',4:'Qui',5:'Sex',6:'Sáb',7:'Dom'} %}{% set wd = b.work_days|from_json %}{% for d in wd %}{{ dias.get(d,d) }}{% if not loop.last %}, {% endif %}{% endfor %}
+            </p>
+            {% if b.login_email %}<p style="font-size:0.8rem; color:var(--verde); margin-top:4px;">🔑 Login: {{ b.login_email }}</p>{% else %}<p style="font-size:0.8rem; color:var(--cinza-texto); margin-top:4px;">Sem login de acesso</p>{% endif %}
+          </div>
+        </div>
+        <div class="flex mt-2" style="gap:8px;">
+          <button class="btn btn-outline btn-sm" onclick='editBarber({{ b|tojson }})'>✏️ Editar</button>
+          {% if b.active %}
+          <form method="POST" action="/admin/barbeiros/excluir" style="display:inline;" onsubmit="return confirm('Desativar este barbeiro? Ele não aparecerá mais no agendamento.')">
+            <input type="hidden" name="barber_id" value="{{ b.id }}">
+            <button class="btn btn-danger btn-sm" type="submit">Desativar</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- Modal adicionar/editar -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <button class="modal-close" onclick="document.getElementById('modal').classList.remove('open')">✕</button>
+    <h3 id="modal-title">Novo Barbeiro</h3>
+    <form method="POST" action="/admin/barbeiros/salvar">
+      <input type="hidden" name="barber_id" id="f_id">
+      <div class="form-group">
+        <label>Nome do barbeiro *</label>
+        <input type="text" name="name" id="f_name" class="form-control" required placeholder="Ex: João Silva">
+      </div>
+      <div class="form-group">
+        <label>Bio / especialidade (opcional)</label>
+        <input type="text" name="bio" id="f_bio" class="form-control" placeholder="Ex: Especialista em degradê há 8 anos">
+      </div>
+      <div class="form-group">
+        <label>Foto (URL, opcional)</label>
+        <input type="url" name="photo_url" id="f_photo" class="form-control" placeholder="https://...">
+      </div>
+      <div class="flex">
+        <div class="form-group" style="flex:1;">
+          <label>Início expediente</label>
+          <input type="time" name="work_start" id="f_ws" class="form-control" value="09:00">
+        </div>
+        <div class="form-group" style="flex:1;">
+          <label>Fim expediente</label>
+          <input type="time" name="work_end" id="f_we" class="form-control" value="18:00">
+        </div>
+      </div>
+      <div class="flex">
+        <div class="form-group" style="flex:1;">
+          <label>Início almoço</label>
+          <input type="time" name="lunch_start" id="f_ls" class="form-control" value="12:00">
+        </div>
+        <div class="form-group" style="flex:1;">
+          <label>Fim almoço</label>
+          <input type="time" name="lunch_end" id="f_le" class="form-control" value="13:00">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Dias que trabalha</label>
+        <div class="flex" style="gap:8px; flex-wrap:wrap;" id="f_days">
+          <label style="font-weight:400;"><input type="checkbox" name="work_days" value="1" checked> Seg</label>
+          <label style="font-weight:400;"><input type="checkbox" name="work_days" value="2" checked> Ter</label>
+          <label style="font-weight:400;"><input type="checkbox" name="work_days" value="3" checked> Qua</label>
+          <label style="font-weight:400;"><input type="checkbox" name="work_days" value="4" checked> Qui</label>
+          <label style="font-weight:400;"><input type="checkbox" name="work_days" value="5" checked> Sex</label>
+          <label style="font-weight:400;"><input type="checkbox" name="work_days" value="6" checked> Sáb</label>
+          <label style="font-weight:400;"><input type="checkbox" name="work_days" value="7"> Dom</label>
+        </div>
+      </div>
+      <hr style="border-color:var(--cinza); margin:16px 0;">
+      <p class="text-muted" style="font-size:0.85rem; margin-bottom:12px;">🔑 <strong>Login de acesso (opcional):</strong> preencha se o barbeiro for acessar o painel com sua própria conta.</p>
+      <div class="form-group">
+        <label>E-mail de login</label>
+        <input type="email" name="email" id="f_email" class="form-control" placeholder="deixe vazio se não precisar de login">
+      </div>
+      <div class="form-group">
+        <label>Senha de login</label>
+        <input type="password" name="password" id="f_pass" class="form-control" placeholder="mínimo 6 caracteres">
+      </div>
+      <div class="form-group" id="active-wrap" style="display:none;">
+        <label><input type="checkbox" name="active" id="f_active" checked> Ativo (aparece no agendamento)</label>
+      </div>
+      <button type="submit" class="btn btn-dourado btn-block">Salvar Barbeiro</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function setDays(daysArr) {
+  document.querySelectorAll('#f_days input').forEach(cb => {
+    cb.checked = daysArr.includes(parseInt(cb.value));
+  });
+}
+function editBarber(b) {
+  document.getElementById('modal-title').textContent = 'Editar Barbeiro';
+  document.getElementById('f_id').value = b.id;
+  document.getElementById('f_name').value = b.name;
+  document.getElementById('f_bio').value = b.bio || '';
+  document.getElementById('f_photo').value = b.photo_url || '';
+  document.getElementById('f_ws').value = b.work_start;
+  document.getElementById('f_we').value = b.work_end;
+  document.getElementById('f_ls').value = b.lunch_start;
+  document.getElementById('f_le').value = b.lunch_end;
+  document.getElementById('f_email').value = b.login_email || '';
+  document.getElementById('f_pass').value = '';
+  document.getElementById('f_active').checked = b.active == 1;
+  document.getElementById('active-wrap').style.display = 'block';
+  try { setDays(JSON.parse(b.work_days)); } catch(e) { setDays([1,2,3,4,5,6]); }
+  document.getElementById('modal').classList.add('open');
+}
+document.getElementById('modal').addEventListener('click', e => { if (e.target.id === 'modal') document.getElementById('modal').classList.remove('open'); });
+</script>
+{% endblock %}

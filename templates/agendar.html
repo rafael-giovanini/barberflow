@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title %}Agendar Horário — Barbearia{% endblock %}
+{% block content %}
+<section class="section container" style="max-width:800px;">
+  <h2 class="section-title">Agendar Horário</h2>
+  <p class="section-sub">Escolha o serviço, dia e horário disponível</p>
+
+  {% if not user %}
+  <div class="error-msg">
+    Você precisa estar logado para agendar. <a href="/login?next=/agendar">Faça login</a> ou <a href="/cadastro">cadastre-se</a> (é grátis e leva 30 segundos).
+  </div>
+  {% endif %}
+
+  <div class="booking-steps">
+    <div class="step active" id="step1">1. Serviço</div>
+    <div class="step" id="step2">2. Dia & Horário</div>
+    <div class="step" id="step3">3. Confirmação</div>
+  </div>
+
+  <!-- Passo 1: Serviço e Barbeiro -->
+  <div id="panel1" class="card" style="padding:24px;">
+    <div class="form-group">
+      <label>Escolha o serviço</label>
+      <select class="form-control" id="service_id">
+        {% for s in services %}
+        <option value="{{ s.id }}" data-price="{{ s.price }}" data-duration="{{ s.duration_min }}">
+          {{ s.name }} — R$ {{ "%.2f"|format(s.price) }} ({{ s.duration_min }} min)
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Barbeiro</label>
+      <select class="form-control" id="barber_id">
+        {% for b in barbers %}
+        <option value="{{ b.id }}">{{ b.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button class="btn btn-dourado btn-block" onclick="goToStep(2)">Próximo →</button>
+  </div>
+
+  <!-- Passo 2: Data e horário -->
+  <div id="panel2" class="card" style="padding:24px; display:none;">
+    <div class="form-group">
+      <label>Escolha o dia</label>
+      <input type="date" class="form-control" id="appt_date">
+    </div>
+    <div id="slots-container">
+      <p class="text-muted text-center">Selecione uma data para ver os horários disponíveis.</p>
+    </div>
+    <div class="flex mt-2">
+      <button class="btn btn-outline" onclick="goToStep(1)">← Voltar</button>
+      <button class="btn btn-dourado" id="btn-confirm-step2" style="flex:1; display:none;" onclick="goToStep(3)">Confirmar horário →</button>
+    </div>
+  </div>
+
+  <!-- Passo 3: Confirmação -->
+  <div id="panel3" class="card" style="padding:24px; display:none;">
+    <h3 style="color:var(--dourado); margin-bottom:16px;">Confirme seu agendamento</h3>
+    <div id="summary" style="margin-bottom:20px; line-height:2;"></div>
+    <div class="form-group">
+      <label>Observações (opcional)</label>
+      <textarea class="form-control" id="notes" rows="2" placeholder="Ex: quero degradê baixo, sobrancelha também..."></textarea>
+    </div>
+    <div class="flex">
+      <button class="btn btn-outline" onclick="goToStep(2)">← Voltar</button>
+      <button class="btn btn-dourado" style="flex:1;" onclick="confirmBooking()">Confirmar Agendamento</button>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let selectedSlot = null;
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.get('service')) {
+  document.getElementById('service_id').value = urlParams.get('service');
+}
+
+// Data mínima = hoje
+const today = new Date().toISOString().split('T')[0];
+document.getElementById('appt_date').min = today;
+
+function goToStep(n) {
+  [1,2,3].forEach(i => {
+    document.getElementById('panel'+i).style.display = (i===n) ? '' : 'none';
+    const stepEl = document.getElementById('step'+i);
+    stepEl.classList.remove('active','done');
+    if (i < n) stepEl.classList.add('done');
+    if (i === n) stepEl.classList.add('active');
+  });
+  if (n === 2) loadSlots();
+  if (n === 3) buildSummary();
+}
+
+document.getElementById('appt_date').addEventListener('change', loadSlots);
+document.getElementById('barber_id').addEventListener('change', () => { if (document.getElementById('panel2').style.display !== 'none') loadSlots(); });
+
+async function loadSlots() {
+  const date = document.getElementById('appt_date').value;
+  const barberId = document.getElementById('barber_id').value;
+  const serviceId = document.getElementById('service_id').value;
+  const container = document.getElementById('slots-container');
+  if (!date) { container.innerHTML = '<p class="text-muted text-center">Selecione uma data.</p>'; return; }
+  container.innerHTML = '<p class="text-muted text-center">Carregando horários...</p>';
+  try {
+    const res = await fetch(`/api/slots?barber_id=${barberId}&date=${date}&service_id=${serviceId}`);
+    const data = await res.json();
+    if (data.slots && data.slots.length > 0) {
+      container.innerHTML = '<label>Horários disponíveis:</label><div class="slot-grid">' +
+        data.slots.map(s => `<button class="slot-btn" onclick="selectSlot(this,'${s}')">${s}</button>`).join('') +
+        '</div>';
+    } else {
+      container.innerHTML = `<p class="text-muted text-center">${data.error || 'Nenhum horário disponível neste dia. Tente outra data.'}</p>`;
+    }
+    selectedSlot = null;
+    document.getElementById('btn-confirm-step2').style.display = 'none';
+  } catch(e) {
+    container.innerHTML = '<p class="text-danger text-center">Erro ao carregar horários.</p>';
+  }
+}
+
+function selectSlot(btn, time) {
+  document.querySelectorAll('.slot-btn').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  selectedSlot = time;
+  document.getElementById('btn-confirm-step2').style.display = '';
+}
+
+function buildSummary() {
+  const sel = document.getElementById('service_id');
+  const serviceText = sel.options[sel.selectedIndex].text;
+  const barber = document.getElementById('barber_id').options[document.getElementById('barber_id').selectedIndex].text;
+  const date = document.getElementById('appt_date').value;
+  const [y,m,d] = date.split('-');
+  const dateFmt = `${d}/${m}/${y}`;
+  document.getElementById('summary').innerHTML = `
+    <div class="flex-between"><span class="text-muted">Serviço:</span><strong>${serviceText.split('—')[0].trim()}</strong></div>
+    <div class="flex-between"><span class="text-muted">Barbeiro:</span><strong>${barber}</strong></div>
+    <div class="flex-between"><span class="text-muted">Data:</span><strong>${dateFmt}</strong></div>
+    <div class="flex-between"><span class="text-muted">Horário:</span><strong class="text-dourado">${selectedSlot}</strong></div>
+    <div class="flex-between" style="border-top:1px solid var(--cinza); margin-top:8px; padding-top:8px;">
+      <span class="text-muted">Valor:</span><strong class="card-price">R$ ${sel.options[sel.selectedIndex].dataset.price}</strong>
+    </div>`;
+}
+
+async function confirmBooking() {
+  const userLoggedIn = {{ 'true' if user else 'false' }};
+  if (!userLoggedIn) { showToast('Faça login para agendar', 'error'); window.location.href='/login?next=/agendar'; return; }
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = 'Agendando...';
+  try {
+    const res = await fetch('/api/agendar', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        service_id: parseInt(document.getElementById('service_id').value),
+        barber_id: parseInt(document.getElementById('barber_id').value),
+        date: document.getElementById('appt_date').value,
+        start_time: selectedSlot,
+        notes: document.getElementById('notes').value
+      })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast('Agendamento confirmado!', 'success');
+      setTimeout(() => window.location.href = '/area-cliente', 1500);
+    } else {
+      showToast(data.error || 'Erro ao agendar', 'error');
+      btn.disabled = false; btn.textContent = 'Confirmar Agendamento';
+    }
+  } catch(e) {
+    showToast('Erro de conexão', 'error');
+    btn.disabled = false; btn.textContent = 'Confirmar Agendamento';
+  }
+}
+</script>
+{% endblock %}

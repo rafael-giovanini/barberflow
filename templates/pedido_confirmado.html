@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Pedido Confirmado!{% endblock %}
+{% block content %}
+<section class="section container" style="max-width:600px; text-align:center;">
+  <div style="font-size:4rem; margin-bottom:16px;">✅</div>
+  <h2 class="section-title">Pedido Confirmado!</h2>
+  <p class="section-sub">Obrigado pela compra, {{ order.customer_name }}!</p>
+
+  <div class="card" style="padding:24px; text-align:left; margin-top:24px;">
+    <h3 style="color:var(--dourado); margin-bottom:16px;">Pedido #{{ order.id }}</h3>
+    {% for item in items %}
+    <div class="flex-between" style="padding:8px 0; border-bottom:1px solid var(--cinza);">
+      <span>{{ item.product_name }} <small class="text-muted">x{{ item.quantity }}</small></span>
+      <strong>R$ {{ "%.2f"|format(item.price * item.quantity) }}</strong>
+    </div>
+    {% endfor %}
+    <div class="flex-between mt-2" style="padding-top:12px;">
+      <span class="text-muted">Total</span>
+      <strong class="card-price">R$ {{ "%.2f"|format(order.total) }}</strong>
+    </div>
+    <div class="mt-2 text-muted" style="font-size:0.9rem;">
+      <p><strong>Entrega:</strong> {{ order.address }}</p>
+      <p><strong>Pagamento:</strong> {{ order.payment_method }}</p>
+    </div>
+  </div>
+
+  <div class="mt-4 flex" style="justify-content:center;">
+    <a href="/" class="btn btn-outline">Voltar ao Início</a>
+    <a href="/area-cliente" class="btn btn-dourado">Ver Meus Pedidos</a>
+  </div>
+</section>
+{% endblock %}
