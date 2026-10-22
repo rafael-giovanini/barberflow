@@ -7,7 +7,7 @@ import hashlib
 import os
 import secrets
 
-ITERATIONS = 100_000
+ITERATIONS = 600_000
 
 
 def hash_password(password: str) -> str:
