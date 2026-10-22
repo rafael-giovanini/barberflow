@@ -493,5 +493,15 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertIn("SameSite=lax", cookie)
 
 
+    def test_cross_origin_state_changing_request_is_rejected(self):
+        response = self.client.post(
+            "/login",
+            data={"email": "cliente@example.test", "password": "SenhaTeste-123"},
+            headers={"Origin": "https://attacker.example"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Origem da requisição não permitida", response.text)
+
+
 if __name__ == "__main__":
     unittest.main()
