@@ -32,11 +32,23 @@ async def inject_settings(request: Request, call_next):
     """Injeta as configurações (cores, nome, logo) em todas as páginas."""
     request.state.settings = get_settings()
     response = await call_next(request)
+    # Cabeçalhos defensivos aplicados também a respostas de erro e redirecionamentos.
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault("Cache-Control", "no-store")
+    if IS_PRODUCTION:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response
 
 # Em desenvolvimento, a chave aleatória evita um segredo fixo no código.
 # Em produção, defina SECRET_KEY com um valor aleatório persistente no ambiente.
-SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_urlsafe(48)
+IS_PRODUCTION = os.getenv("ENVIRONMENT", "development").strip().lower() == "production"
+_configured_secret = os.getenv("SECRET_KEY", "").strip()
+if IS_PRODUCTION and len(_configured_secret) < 32:
+    raise RuntimeError("Em produção, configure SECRET_KEY com pelo menos 32 caracteres aleatórios.")
+SECRET_KEY = _configured_secret or secrets.token_urlsafe(48)
 serializer = URLSafeTimedSerializer(SECRET_KEY)
 
 COOKIE_NAME = "barbearia_session"
@@ -58,7 +70,7 @@ def set_session(response, user_id: int, role: str, name: str):
     })
     response.set_cookie(
         COOKIE_NAME, token, httponly=True, max_age=86400 * 30,
-        secure=os.getenv("COOKIE_SECURE", "0").lower() in ("1", "true", "yes"),
+        secure=IS_PRODUCTION or os.getenv("COOKIE_SECURE", "0").lower() in ("1", "true", "yes"),
         samesite="lax",
     )
 
@@ -246,11 +258,37 @@ def login_page(request: Request):
 
 @app.post("/login")
 def login(request: Request, email: str = Form(...), password: str = Form(...)):
+    normalized_email = email.strip().lower()
+    client_ip = request.client.host if request.client else "unknown"
+    now = datetime.utcnow()
+    window_start = (now - timedelta(minutes=15)).isoformat()
+
     db = get_db()
-    user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+    # Limite persistente no SQLite: continua funcionando entre reinicializações.
+    attempts = db.execute("""
+        SELECT COUNT(*) AS total FROM auth_login_attempts
+        WHERE email=? AND client_ip=? AND attempted_at >= ? AND succeeded=0
+    """, (normalized_email, client_ip, window_start)).fetchone()["total"]
+    if attempts >= 10:
+        db.close()
+        return templates.TemplateResponse("login.html", {
+            "request": request, "user": None,
+            "error": "Muitas tentativas de acesso. Aguarde 15 minutos e tente novamente."
+        }, status_code=429)
+
+    user = db.execute("SELECT * FROM users WHERE email=?", (normalized_email,)).fetchone()
+    valid = bool(user and user["active"] and verify_password(password, user["password_hash"]))
+    db.execute(
+        "INSERT INTO auth_login_attempts (email, client_ip, attempted_at, succeeded) VALUES (?, ?, ?, ?)",
+        (normalized_email, client_ip, now.isoformat(), 1 if valid else 0),
+    )
+    # Limpeza limitada para impedir crescimento indefinido da tabela de tentativas.
+    db.execute("DELETE FROM auth_login_attempts WHERE attempted_at < ?",
+               ((now - timedelta(days=7)).isoformat(),))
+    db.commit()
     db.close()
-    if (not user or not user["active"]
-            or not verify_password(password, user["password_hash"])):
+
+    if not valid:
         return templates.TemplateResponse("login.html", {
             "request": request, "user": None, "error": "E-mail ou senha inválidos."
         })
