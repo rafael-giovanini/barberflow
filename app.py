@@ -42,7 +42,15 @@ async def inject_settings(request: Request, call_next):
             request_host = request.headers.get("host", "").lower()
             origin_host = (origin_parts.netloc or "").lower()
             if not origin_parts.scheme or not origin_host or origin_host != request_host:
-                return JSONResponse({"detail": "Origem da requisição não permitida."}, status_code=403)
+                response = JSONResponse({"detail": "Origem da requisição não permitida."}, status_code=403)
+                response.headers["X-Content-Type-Options"] = "nosniff"
+                response.headers["X-Frame-Options"] = "DENY"
+                response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+                response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+                response.headers["Cache-Control"] = "no-store"
+                if IS_PRODUCTION:
+                    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+                return response
 
     response = await call_next(request)
     # Cabeçalhos defensivos aplicados também a respostas de erro e redirecionamentos.
