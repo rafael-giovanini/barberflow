@@ -4,6 +4,7 @@
 <section class="section container" style="max-width:1100px;">
   <h2 class="section-title">Gestão de clientes</h2>
   <p class="section-sub">Pesquise, atualize os dados e desative contas sem excluir o histórico.</p>
+  <p><a class="btn btn-dourado" href="/admin/clientes/novo">Cadastrar novo cliente</a></p>
   {% if request.query_params.get('salvo') %}<div class="success-msg">Cadastro atualizado.</div>{% endif %}
   {% if request.query_params.get('erro') %}<div class="error-msg">Não foi possível salvar. Verifique os dados e se o e-mail já está em uso.</div>{% endif %}
   <form method="get" action="/admin/clientes" class="flex mb-4">
