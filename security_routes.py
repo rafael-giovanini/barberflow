@@ -64,9 +64,9 @@ def register_security_routes(app, templates, get_db, get_current_user,
             return render(request, "admin/cliente_novo.html", user,
                           error="Informe um nome e um e-mail válidos.",
                           name=name, email=email, phone=phone)
-        if len(password) < 6:
+        if len(password) < 8:
             return render(request, "admin/cliente_novo.html", user,
-                          error="A senha deve ter pelo menos 6 caracteres.",
+                          error="A senha deve ter pelo menos 8 caracteres.",
                           name=name, email=email, phone=phone)
         if password != confirm_password:
             return render(request, "admin/cliente_novo.html", user,
@@ -189,9 +189,9 @@ def register_security_routes(app, templates, get_db, get_current_user,
         user = get_current_user(request)
         if not user:
             return RedirectResponse(url="/login", status_code=303)
-        if len(new_password) < 6:
+        if len(new_password) < 8:
             return render(request, "minha_conta.html", user,
-                          error="A nova senha deve ter pelo menos 6 caracteres.", success=None)
+                          error="A nova senha deve ter pelo menos 8 caracteres.", success=None)
         if new_password != confirm_password:
             return render(request, "minha_conta.html", user,
                           error="A confirmação da nova senha não confere.", success=None)
@@ -305,9 +305,9 @@ def register_security_routes(app, templates, get_db, get_current_user,
         new_password: str = Form(...),
         confirm_password: str = Form(...)
     ):
-        if len(new_password) < 6 or new_password != confirm_password:
+        if len(new_password) < 8 or new_password != confirm_password:
             return render(request, "redefinir_senha.html", None, token=token, valid=True,
-                          error="Use uma senha com pelo menos 6 caracteres e confirme-a corretamente.")
+                          error="Use uma senha com pelo menos 8 caracteres e confirme-a corretamente.")
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         db = get_db()
         now = datetime.now(timezone.utc).isoformat()
