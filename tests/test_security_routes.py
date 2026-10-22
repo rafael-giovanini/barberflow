@@ -358,5 +358,77 @@ class SecurityRouteTests(unittest.TestCase):
                 })
 
 
+    def test_duplicate_email_on_customer_creation_does_not_create_account(self):
+        self._login("admin@example.test")
+        response = self.client.post("/admin/clientes/novo", data={
+            "name": "Cadastro Duplicado",
+            "email": " OUTRO@example.test ",
+            "phone": "11988887777",
+            "password": "SenhaNova-456",
+            "confirm_password": "SenhaNova-456",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Já existe uma conta cadastrada com esse e-mail.", response.text)
+
+        db = self.app_module.get_db()
+        rows = db.execute(
+            "SELECT id FROM users WHERE email=?", ("outro@example.test",)
+        ).fetchall()
+        db.close()
+        self.assertEqual(len(rows), 1)
+
+    def test_customer_status_route_cannot_change_admin_or_barber_status(self):
+        self._login("admin@example.test")
+        db = self.app_module.get_db()
+        targets = db.execute(
+            "SELECT id, active, session_version, role FROM users WHERE role IN ('admin', 'barber')"
+        ).fetchall()
+        db.close()
+
+        for target in targets:
+            with self.subTest(role=target["role"]):
+                response = self.client.post("/admin/clientes/status", data={
+                    "customer_id": target["id"],
+                    "active": "0" if target["active"] else "1",
+                })
+                self.assertEqual(response.status_code, 303)
+
+                db = self.app_module.get_db()
+                unchanged = db.execute(
+                    "SELECT active, session_version, role FROM users WHERE id=?",
+                    (target["id"],),
+                ).fetchone()
+                db.close()
+                self.assertEqual(dict(unchanged), {
+                    "active": target["active"],
+                    "session_version": target["session_version"],
+                    "role": target["role"],
+                })
+
+    def test_new_customer_rejects_short_or_mismatched_password(self):
+        self._login("admin@example.test")
+        cases = [
+            ("short", "short", "A senha deve ter pelo menos 6 caracteres."),
+            ("SenhaNova-456", "diferente", "A confirmação da senha não confere."),
+        ]
+        for index, (password, confirmation, message) in enumerate(cases):
+            email = f"invalid-password-{index}@example.test"
+            with self.subTest(email=email):
+                response = self.client.post("/admin/clientes/novo", data={
+                    "name": "Cliente Inválido",
+                    "email": email,
+                    "phone": "",
+                    "password": password,
+                    "confirm_password": confirmation,
+                })
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(message, response.text)
+
+                db = self.app_module.get_db()
+                row = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+                db.close()
+                self.assertIsNone(row)
+
+
 if __name__ == "__main__":
     unittest.main()
