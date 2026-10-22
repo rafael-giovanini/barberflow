@@ -5,6 +5,7 @@ FastAPI + SQLite + Templates Jinja2
 import json
 import os
 import secrets
+import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -276,11 +277,20 @@ def cadastro(request: Request, name: str = Form(...), email: str = Form(...),
             "request": request, "user": None, "error": "Este e-mail já está cadastrado."
         })
     pw_hash = hash_password(password)
-    cur = db.execute("INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
-                     (name, email, phone, pw_hash, "customer"))
-    db.commit()
-    user_id = cur.lastrowid
-    db.close()
+    try:
+        cur = db.execute("INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
+                         (name, email, phone, pw_hash, "customer"))
+        db.commit()
+        user_id = cur.lastrowid
+    except sqlite3.IntegrityError:
+        db.rollback()
+        db.close()
+        return templates.TemplateResponse("cadastro.html", {
+            "request": request, "user": None,
+            "error": "Este e-mail já está cadastrado."
+        }, status_code=409)
+    finally:
+        db.close()
     resp = RedirectResponse(url="/area-cliente", status_code=303)
     set_session(resp, user_id, "customer", name)
     return resp
