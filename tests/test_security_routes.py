@@ -430,5 +430,44 @@ class SecurityRouteTests(unittest.TestCase):
                 self.assertIsNone(row)
 
 
+    def test_customer_edit_nonexistent_id_does_not_report_success(self):
+        self._login("admin@example.test")
+        db = self.app_module.get_db()
+        nonexistent_id = db.execute("SELECT COALESCE(MAX(id), 0) + 1000 FROM users").fetchone()[0]
+        db.close()
+
+        response = self.client.post("/admin/clientes/salvar", data={
+            "customer_id": nonexistent_id,
+            "name": "Cliente Inexistente",
+            "email": "inexistente@example.test",
+            "phone": "",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/admin/clientes?erro=nao_encontrado")
+
+    def test_customer_status_nonexistent_id_does_not_change_any_account(self):
+        self._login("admin@example.test")
+        db = self.app_module.get_db()
+        before = db.execute(
+            "SELECT id, active, session_version FROM users ORDER BY id"
+        ).fetchall()
+        nonexistent_id = max(row["id"] for row in before) + 1000
+        db.close()
+
+        response = self.client.post("/admin/clientes/status", data={
+            "customer_id": nonexistent_id,
+            "active": "0",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/admin/clientes?erro=nao_encontrado")
+
+        db = self.app_module.get_db()
+        after = db.execute(
+            "SELECT id, active, session_version FROM users ORDER BY id"
+        ).fetchall()
+        db.close()
+        self.assertEqual([dict(row) for row in after], [dict(row) for row in before])
+
+
 if __name__ == "__main__":
     unittest.main()
