@@ -135,13 +135,27 @@ def require_admin(request: Request):
 
 
 def get_cart(request: Request):
-    """Lê carrinho do cookie (lista de {product_id, qty})."""
+    """Lê e normaliza o carrinho não confiável armazenado no cookie do navegador."""
     raw = request.cookies.get(CART_COOKIE)
     if not raw:
         return []
     try:
-        return json.loads(raw)
-    except Exception:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            return []
+        normalized = {}
+        for item in parsed[:50]:
+            if not isinstance(item, dict):
+                continue
+            try:
+                product_id = int(item.get("product_id"))
+                qty = int(item.get("qty"))
+            except (TypeError, ValueError):
+                continue
+            if product_id > 0 and 1 <= qty <= 20:
+                normalized[product_id] = min(20, normalized.get(product_id, 0) + qty)
+        return [{"product_id": pid, "qty": qty} for pid, qty in normalized.items()]
+    except (ValueError, TypeError):
         return []
 
 
@@ -1019,8 +1033,14 @@ async def admin_barbeiro_salvar(request: Request):
     db = get_db()
     barber_id = form.get("barber_id")
     work_days = json.dumps([int(d) for d in form.getlist("work_days")] or [1,2,3,4,5,6])
-    email = form.get("email", "").strip()
-    password = form.get("password", "").strip()
+    email = form.get("email", "").strip().lower()
+    password = form.get("password", "")
+    if email and ("@" not in email or len(email) > 254):
+        db.close()
+        return RedirectResponse(url="/admin/barbeiros?erro=email", status_code=303)
+    if password and len(password) < 8:
+        db.close()
+        return RedirectResponse(url="/admin/barbeiros?erro=senha", status_code=303)
 
     if barber_id:
         db.execute("""UPDATE barbers SET name=?, bio=?, photo_url=?, work_start=?, work_end=?,
@@ -1032,7 +1052,7 @@ async def admin_barbeiro_salvar(request: Request):
         if email and password:
             existing = db.execute("SELECT user_id FROM barbers WHERE id=?", (barber_id,)).fetchone()
             if existing and existing["user_id"]:
-                db.execute("UPDATE users SET email=?, password_hash=?, name=? WHERE id=?",
+                db.execute("UPDATE users SET email=?, password_hash=?, name=?, session_version=session_version+1 WHERE id=?",
                            (email, hash_password(password), name, existing["user_id"]))
             else:
                 cur = db.execute("INSERT INTO users (name, email, password_hash, role) VALUES (?,?,?,?)",
