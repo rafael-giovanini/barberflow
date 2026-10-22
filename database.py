@@ -284,18 +284,32 @@ def seed_data(conn):
     for p in portfolio:
         c.execute("INSERT INTO portfolio (name, description, image_url, category, service_id) VALUES (?,?,?,?,?)", p)
 
-    # Barbeiro padrão (admin) - senha: admin123
-    from auth import hash_password
-    admin_hash = hash_password("admin123")
-    c.execute("INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
-              ("Barbeiro Chefe", "admin@barbearia.com", "18999999999", admin_hash, "admin"))
-    admin_id = c.lastrowid
-    c.execute("INSERT INTO barbers (user_id, name, bio, active) VALUES (?,?,?,?)",
-              (admin_id, "Barbeiro Chefe", "Especialista em cortes modernos e degradê há 10 anos.", 1))
+    # Cria conta administrativa somente quando credenciais são configuradas no ambiente.
+    # Nunca inserir uma senha padrão conhecida em uma instalação nova.
+    import os
+    admin_email = os.getenv("INITIAL_ADMIN_EMAIL", "").strip().lower()
+    admin_password = os.getenv("INITIAL_ADMIN_PASSWORD", "")
+    if admin_email and admin_password:
+        from auth import hash_password
+        existing_admin = c.execute(
+            "SELECT id FROM users WHERE role='admin' LIMIT 1"
+        ).fetchone()
+        if not existing_admin:
+            admin_hash = hash_password(admin_password)
+            c.execute(
+                "INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
+                ("Administrador", admin_email, "", admin_hash, "admin")
+            )
+            admin_id = c.lastrowid
+            c.execute(
+                "INSERT INTO barbers (user_id, name, bio, active) VALUES (?,?,?,?)",
+                (admin_id, "Administrador", "", 1)
+            )
 
     conn.commit()
-    print("✅ Dados iniciais inseridos!")
-    print("   Login admin: admin@barbearia.com / senha: admin123")
+    print("Dados iniciais inseridos.")
+    if not (admin_email and admin_password):
+        print("Configure INITIAL_ADMIN_EMAIL e INITIAL_ADMIN_PASSWORD para criar o administrador inicial.")
 
 
 if __name__ == "__main__":
