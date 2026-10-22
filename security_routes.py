@@ -6,6 +6,7 @@ templates e os helpers de autenticação existentes.
 import hashlib
 import os
 import secrets
+import sqlite3
 import smtplib
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -29,6 +30,67 @@ def register_security_routes(app, templates, get_db, get_current_user,
         if not user or user.get("role") != "admin":
             return None
         return user
+
+    def staff_only(request):
+        """Permite cadastro operacional de clientes a administradores e barbeiros."""
+        user = get_current_user(request)
+        if not user or user.get("role") not in ("admin", "barber"):
+            return None
+        return user
+
+    @app.get("/admin/clientes/novo", response_class=HTMLResponse)
+    def novo_cliente_page(request: Request):
+        user = staff_only(request)
+        if not user:
+            return RedirectResponse(url="/login", status_code=303)
+        return render(request, "admin/cliente_novo.html", user, error=None,
+                      name="", email="", phone="")
+
+    @app.post("/admin/clientes/novo")
+    def novo_cliente_salvar(
+        request: Request,
+        name: str = Form(...),
+        email: str = Form(...),
+        phone: str = Form(""),
+        password: str = Form(...),
+        confirm_password: str = Form(...)
+    ):
+        user = staff_only(request)
+        if not user:
+            return RedirectResponse(url="/login", status_code=303)
+
+        name, email, phone = name.strip(), email.strip().lower(), phone.strip()
+        if not name or not email or "@" not in email:
+            return render(request, "admin/cliente_novo.html", user,
+                          error="Informe um nome e um e-mail válidos.",
+                          name=name, email=email, phone=phone)
+        if len(password) < 6:
+            return render(request, "admin/cliente_novo.html", user,
+                          error="A senha deve ter pelo menos 6 caracteres.",
+                          name=name, email=email, phone=phone)
+        if password != confirm_password:
+            return render(request, "admin/cliente_novo.html", user,
+                          error="A confirmação da senha não confere.",
+                          name=name, email=email, phone=phone)
+
+        db = get_db()
+        try:
+            db.execute("""
+                INSERT INTO users (name, email, phone, password_hash, role)
+                VALUES (?, ?, ?, ?, 'customer')
+            """, (name, email, phone, hash_password(password)))
+            db.commit()
+        except sqlite3.IntegrityError:
+            db.rollback()
+            db.close()
+            return render(request, "admin/cliente_novo.html", user,
+                          error="Já existe uma conta cadastrada com esse e-mail.",
+                          name=name, email=email, phone=phone)
+        finally:
+            # Fechar somente se ainda estiver aberto; close é seguro mesmo após o except.
+            db.close()
+
+        return RedirectResponse(url="/admin/clientes/novo?salvo=1", status_code=303)
 
     @app.get("/admin/clientes", response_class=HTMLResponse)
     def admin_clientes(request: Request, q: str = ""):
