@@ -3,6 +3,9 @@ Sistema de Barbearia - Aplicação Principal
 FastAPI + SQLite + Templates Jinja2
 """
 import json
+import os
+import secrets
+import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -27,12 +30,47 @@ templates.env.filters["from_json"] = lambda s: _json.loads(s) if s else []
 
 @app.middleware("http")
 async def inject_settings(request: Request, call_next):
-    """Injeta as configurações (cores, nome, logo) em todas as páginas."""
+    """Injeta configurações e aplica validações defensivas globais."""
     request.state.settings = get_settings()
+
+    # Rejeita POSTs com Origin explicitamente externo; complementa SameSite=Lax.
+    # Requisições sem Origin (ex.: clientes de teste/integrações) seguem o fluxo normal.
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        origin = request.headers.get("origin")
+        if origin:
+            from urllib.parse import urlsplit
+            origin_parts = urlsplit(origin)
+            request_host = request.headers.get("host", "").lower()
+            origin_host = (origin_parts.netloc or "").lower()
+            if not origin_parts.scheme or not origin_host or origin_host != request_host:
+                response = JSONResponse({"detail": "Origem da requisição não permitida."}, status_code=403)
+                response.headers["X-Content-Type-Options"] = "nosniff"
+                response.headers["X-Frame-Options"] = "DENY"
+                response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+                response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+                response.headers["Cache-Control"] = "no-store"
+                if IS_PRODUCTION:
+                    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+                return response
+
     response = await call_next(request)
+    # Cabeçalhos defensivos aplicados também a respostas de erro e redirecionamentos.
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault("Cache-Control", "no-store")
+    if IS_PRODUCTION:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response
 
-SECRET_KEY = "troque-esta-chave-por-uma-secreta-sua-2024"
+# Em desenvolvimento, a chave aleatória evita um segredo fixo no código.
+# Em produção, defina SECRET_KEY com um valor aleatório persistente no ambiente.
+IS_PRODUCTION = os.getenv("ENVIRONMENT", "development").strip().lower() == "production"
+_configured_secret = os.getenv("SECRET_KEY", "").strip()
+if IS_PRODUCTION and len(_configured_secret) < 32:
+    raise RuntimeError("Em produção, configure SECRET_KEY com pelo menos 32 caracteres aleatórios.")
+SECRET_KEY = _configured_secret or secrets.token_urlsafe(48)
 serializer = URLSafeTimedSerializer(SECRET_KEY)
 
 COOKIE_NAME = "barbearia_session"
@@ -41,8 +79,22 @@ CART_COOKIE = "barbearia_cart"
 
 # ---------- Helpers de autenticação ----------
 def set_session(response, user_id: int, role: str, name: str):
-    token = serializer.dumps({"user_id": user_id, "role": role, "name": name})
-    response.set_cookie(COOKIE_NAME, token, httponly=True, max_age=86400 * 30)
+    db = get_db()
+    row = db.execute(
+        "SELECT session_version, active FROM users WHERE id=?", (user_id,)
+    ).fetchone()
+    db.close()
+    if not row or not row["active"]:
+        return
+    token = serializer.dumps({
+        "user_id": user_id, "role": role, "name": name,
+        "session_version": row["session_version"],
+    })
+    response.set_cookie(
+        COOKIE_NAME, token, httponly=True, max_age=86400 * 30,
+        secure=IS_PRODUCTION or os.getenv("COOKIE_SECURE", "0").lower() in ("1", "true", "yes"),
+        samesite="lax",
+    )
 
 
 def get_current_user(request: Request):
@@ -51,6 +103,19 @@ def get_current_user(request: Request):
         return None
     try:
         data = serializer.loads(token, max_age=86400 * 30)
+        # Sessões antigas ou revogadas deixam de ser aceitas após troca de senha
+        # ou desativação da conta.
+        db = get_db()
+        row = db.execute(
+            "SELECT role, name, active, session_version FROM users WHERE id=?",
+            (data.get("user_id"),),
+        ).fetchone()
+        db.close()
+        if (not row or not row["active"]
+                or data.get("session_version") != row["session_version"]):
+            return None
+        data["role"] = row["role"]
+        data["name"] = row["name"]
         return data
     except Exception:
         return None
@@ -71,13 +136,27 @@ def require_admin(request: Request):
 
 
 def get_cart(request: Request):
-    """Lê carrinho do cookie (lista de {product_id, qty})."""
+    """Lê e normaliza o carrinho não confiável armazenado no cookie do navegador."""
     raw = request.cookies.get(CART_COOKIE)
     if not raw:
         return []
     try:
-        return json.loads(raw)
-    except Exception:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            return []
+        normalized = {}
+        for item in parsed[:50]:
+            if not isinstance(item, dict):
+                continue
+            try:
+                product_id = int(item.get("product_id"))
+                qty = int(item.get("qty"))
+            except (TypeError, ValueError):
+                continue
+            if product_id > 0 and 1 <= qty <= 20:
+                normalized[product_id] = min(20, normalized.get(product_id, 0) + qty)
+        return [{"product_id": pid, "qty": qty} for pid, qty in normalized.items()]
+    except (ValueError, TypeError):
         return []
 
 
@@ -182,6 +261,14 @@ def cadastro_page(request: Request):
 @app.post("/cadastro")
 def cadastro(request: Request, name: str = Form(...), email: str = Form(...),
              phone: str = Form(""), password: str = Form(...)):
+    name = name.strip()
+    email = email.strip().lower()
+    phone = phone.strip()
+    if not name or "@" not in email or len(password) < 8:
+        return templates.TemplateResponse("cadastro.html", {
+            "request": request, "user": None,
+            "error": "Informe nome e e-mail válidos e uma senha com pelo menos 8 caracteres."
+        })
     db = get_db()
     existing = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
     if existing:
@@ -190,11 +277,20 @@ def cadastro(request: Request, name: str = Form(...), email: str = Form(...),
             "request": request, "user": None, "error": "Este e-mail já está cadastrado."
         })
     pw_hash = hash_password(password)
-    cur = db.execute("INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
-                     (name, email, phone, pw_hash, "customer"))
-    db.commit()
-    user_id = cur.lastrowid
-    db.close()
+    try:
+        cur = db.execute("INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
+                         (name, email, phone, pw_hash, "customer"))
+        db.commit()
+        user_id = cur.lastrowid
+    except sqlite3.IntegrityError:
+        db.rollback()
+        db.close()
+        return templates.TemplateResponse("cadastro.html", {
+            "request": request, "user": None,
+            "error": "Este e-mail já está cadastrado."
+        }, status_code=409)
+    finally:
+        db.close()
     resp = RedirectResponse(url="/area-cliente", status_code=303)
     set_session(resp, user_id, "customer", name)
     return resp
@@ -207,10 +303,52 @@ def login_page(request: Request):
 
 @app.post("/login")
 def login(request: Request, email: str = Form(...), password: str = Form(...)):
+    normalized_email = email.strip().lower()
+    client_ip = request.client.host if request.client else "unknown"
+    now = datetime.utcnow()
+    window_start = (now - timedelta(minutes=15)).isoformat()
+
     db = get_db()
-    user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+    # Limite persistente no SQLite: continua funcionando entre reinicializações.
+    attempts = db.execute("""
+        SELECT COUNT(*) AS total FROM auth_login_attempts
+        WHERE email=? AND client_ip=? AND attempted_at >= ? AND succeeded=0
+    """, (normalized_email, client_ip, window_start)).fetchone()["total"]
+    if attempts >= 10:
+        db.close()
+        return templates.TemplateResponse("login.html", {
+            "request": request, "user": None,
+            "error": "Muitas tentativas de acesso. Aguarde 15 minutos e tente novamente."
+        }, status_code=429)
+
+    user = db.execute("SELECT * FROM users WHERE email=?", (normalized_email,)).fetchone()
+    valid = bool(user and user["active"] and verify_password(password, user["password_hash"]))
+    if valid:
+        # Atualiza hashes legados no próximo login válido, sem exigir redefinição
+        # de senha nem invalidar a sessão recém-criada.
+        try:
+            stored_iterations = int(user["password_hash"].split("$", 3)[1])
+        except (IndexError, TypeError, ValueError):
+            stored_iterations = 0
+        if stored_iterations < 600_000:
+            upgraded_hash = hash_password(password)
+            db.execute("UPDATE users SET password_hash=? WHERE id=?",
+                       (upgraded_hash, user["id"]))
+    db.execute(
+        "INSERT INTO auth_login_attempts (email, client_ip, attempted_at, succeeded) VALUES (?, ?, ?, ?)",
+        (normalized_email, client_ip, now.isoformat(), 1 if valid else 0),
+    )
+    if valid:
+        # Um login válido remove falhas anteriores para não manter o usuário bloqueado.
+        db.execute("DELETE FROM auth_login_attempts WHERE email=? AND client_ip=? AND succeeded=0",
+                   (normalized_email, client_ip))
+    # Limpeza limitada para impedir crescimento indefinido da tabela de tentativas.
+    db.execute("DELETE FROM auth_login_attempts WHERE attempted_at < ?",
+               ((now - timedelta(days=7)).isoformat(),))
+    db.commit()
     db.close()
-    if not user or not verify_password(password, user["password_hash"]):
+
+    if not valid:
         return templates.TemplateResponse("login.html", {
             "request": request, "user": None, "error": "E-mail ou senha inválidos."
         })
@@ -313,37 +451,59 @@ async def api_agendar(request: Request):
     user = get_current_user(request)
     if not user:
         return JSONResponse({"ok": False, "error": "Faça login para agendar"}, status_code=401)
-    data = await request.json()
-    db = get_db()
-    service = db.execute("SELECT duration_min FROM services WHERE id=?", (data["service_id"],)).fetchone()
-    if not service:
-        db.close()
-        return JSONResponse({"ok": False, "error": "Serviço inválido"})
-    start = datetime.strptime(data["start_time"], "%H:%M")
-    end = start + timedelta(minutes=service["duration_min"])
-    # Verifica conflito
-    conflict = db.execute("""
-        SELECT id FROM appointments WHERE barber_id=? AND appointment_date=? AND status='scheduled'
-        AND NOT (end_time <= ? OR start_time >= ?)
-    """, (data["barber_id"], data["date"], data["start_time"], end.strftime("%H:%M"))).fetchone()
-    if conflict:
-        db.close()
-        return JSONResponse({"ok": False, "error": "Horário já reservado, escolha outro."})
-    db.execute("""
-        INSERT INTO appointments (user_id, barber_id, service_id, appointment_date, start_time, end_time, notes)
-        VALUES (?,?,?,?,?,?,?)
-    """, (user["user_id"], data["barber_id"], data["service_id"], data["date"],
-          data["start_time"], end.strftime("%H:%M"), data.get("notes", "")))
-    db.commit()
-    db.close()
-    # Notifica o barbeiro no WhatsApp (se configurado)
     try:
-        parts = data["date"].split("-")
-        msg = (f"🔔 NOVO AGENDAMENTO!\n"
-               f"Cliente: {user['name']}\n"
-               f"Data: {parts[2]}/{parts[1]}/{parts[0]} às {data['start_time']}\n"
-               f"Serviço: ID {data['service_id']}\n"
-               f"Obs: {data.get('notes','-')}")
+        data = await request.json()
+        barber_id = int(data["barber_id"])
+        service_id = int(data["service_id"])
+        appointment_date = datetime.strptime(str(data["date"]), "%Y-%m-%d").date()
+        start = datetime.strptime(str(data["start_time"]), "%H:%M")
+        notes = str(data.get("notes", "")).strip()[:500]
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Dados de agendamento inválidos."}, status_code=400)
+    if appointment_date < datetime.now().date():
+        return JSONResponse({"ok": False, "error": "Não é possível agendar no passado."}, status_code=400)
+    db = get_db()
+    try:
+        barber = db.execute("SELECT * FROM barbers WHERE id=? AND active=1", (barber_id,)).fetchone()
+        service = db.execute("SELECT duration_min FROM services WHERE id=? AND active=1", (service_id,)).fetchone()
+        if not barber or not service:
+            return JSONResponse({"ok": False, "error": "Barbeiro ou serviço indisponível."}, status_code=400)
+        end = start + timedelta(minutes=service["duration_min"])
+        work_days = json.loads(barber["work_days"] or "[]")
+        if appointment_date.isoweekday() not in work_days:
+            return JSONResponse({"ok": False, "error": "O barbeiro não atende nesta data."}, status_code=400)
+        work_start = datetime.strptime(barber["work_start"], "%H:%M")
+        work_end = datetime.strptime(barber["work_end"], "%H:%M")
+        lunch_start = datetime.strptime(barber["lunch_start"], "%H:%M")
+        lunch_end = datetime.strptime(barber["lunch_end"], "%H:%M")
+        if (start < work_start or end > work_end or
+                (start < lunch_end and end > lunch_start) or start.minute not in (0, 30)):
+            return JSONResponse({"ok": False, "error": "Horário fora da agenda de atendimento."}, status_code=400)
+        if appointment_date == datetime.now().date() and start.time() <= datetime.now().time():
+            return JSONResponse({"ok": False, "error": "Não é possível agendar um horário passado."}, status_code=400)
+        db.execute("BEGIN IMMEDIATE")
+        conflict = db.execute("""
+            SELECT id FROM appointments WHERE barber_id=? AND appointment_date=? AND status='scheduled'
+            AND NOT (end_time <= ? OR start_time >= ?)
+        """, (barber_id, appointment_date.isoformat(), start.strftime("%H:%M"), end.strftime("%H:%M"))).fetchone()
+        if conflict:
+            db.rollback()
+            return JSONResponse({"ok": False, "error": "Horário já reservado, escolha outro."}, status_code=409)
+        db.execute("""
+            INSERT INTO appointments (user_id, barber_id, service_id, appointment_date, start_time, end_time, notes)
+            VALUES (?,?,?,?,?,?,?)
+        """, (user["user_id"], barber_id, service_id, appointment_date.isoformat(),
+              start.strftime("%H:%M"), end.strftime("%H:%M"), notes))
+        db.commit()
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+        db.rollback()
+        return JSONResponse({"ok": False, "error": "Configuração de agenda inválida."}, status_code=400)
+    finally:
+        db.close()
+    try:
+        msg = (f"🔔 NOVO AGENDAMENTO!\nCliente: {user['name']}\n"
+               f"Data: {appointment_date.strftime('%d/%m/%Y')} às {start.strftime('%H:%M')}\n"
+               f"Serviço: {service_id}\nObs: {notes or '-'}")
         send_whatsapp_notify(msg)
     except Exception:
         pass
@@ -353,43 +513,70 @@ async def api_agendar(request: Request):
 # ---------- API: carrinho ----------
 @app.post("/api/carrinho/add")
 async def api_cart_add(request: Request):
-    data = await request.json()
+    try:
+        data = await request.json()
+        pid, qty = int(data["product_id"]), int(data.get("qty", 1))
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Produto ou quantidade inválidos."}, status_code=400)
+    if pid <= 0 or qty <= 0 or qty > 20:
+        return JSONResponse({"ok": False, "error": "A quantidade deve estar entre 1 e 20."}, status_code=400)
+    db = get_db()
+    product = db.execute("SELECT stock FROM products WHERE id=? AND active=1", (pid,)).fetchone()
+    db.close()
+    if not product or product["stock"] <= 0:
+        return JSONResponse({"ok": False, "error": "Produto indisponível."}, status_code=404)
     cart = get_cart(request)
-    pid = data["product_id"]
-    qty = data.get("qty", 1)
+    cart = [{"product_id": int(i["product_id"]), "qty": int(i["qty"])}
+            for i in cart if isinstance(i, dict) and str(i.get("product_id", "")).isdigit()
+            and str(i.get("qty", "")).isdigit() and int(i["qty"]) > 0][:50]
     found = False
     for item in cart:
         if item["product_id"] == pid:
-            item["qty"] += qty
+            item["qty"] = min(item["qty"] + qty, min(20, product["stock"]))
             found = True
             break
     if not found:
-        cart.append({"product_id": pid, "qty": qty})
+        cart.append({"product_id": pid, "qty": min(qty, product["stock"])})
     resp = JSONResponse({"ok": True, "cart_count": sum(i["qty"] for i in cart)})
-    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7)
+    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7, httponly=True,
+                    secure=IS_PRODUCTION, samesite="lax")
     return resp
 
 
 @app.post("/api/carrinho/update")
 async def api_cart_update(request: Request):
-    data = await request.json()
-    cart = get_cart(request)
-    pid = data["product_id"]
-    qty = data.get("qty", 0)
-    cart = [i for i in cart if i["product_id"] != pid]
+    try:
+        data = await request.json()
+        pid, qty = int(data["product_id"]), int(data.get("qty", 0))
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Produto ou quantidade inválidos."}, status_code=400)
+    if pid <= 0 or qty < 0 or qty > 20:
+        return JSONResponse({"ok": False, "error": "Quantidade inválida."}, status_code=400)
+    cart = [i for i in get_cart(request) if isinstance(i, dict) and i.get("product_id") != pid]
     if qty > 0:
-        cart.append({"product_id": pid, "qty": qty})
+        db = get_db()
+        product = db.execute("SELECT stock FROM products WHERE id=? AND active=1", (pid,)).fetchone()
+        db.close()
+        if not product:
+            return JSONResponse({"ok": False, "error": "Produto indisponível."}, status_code=404)
+        cart.append({"product_id": pid, "qty": min(qty, product["stock"], 20)})
     resp = JSONResponse({"ok": True})
-    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7)
+    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7, httponly=True,
+                    secure=IS_PRODUCTION, samesite="lax")
     return resp
 
 
 @app.post("/api/carrinho/remove")
 async def api_cart_remove(request: Request):
-    data = await request.json()
-    cart = [i for i in get_cart(request) if i["product_id"] != data["product_id"]]
+    try:
+        data = await request.json()
+        pid = int(data["product_id"])
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Produto inválido."}, status_code=400)
+    cart = [i for i in get_cart(request) if isinstance(i, dict) and i.get("product_id") != pid]
     resp = JSONResponse({"ok": True})
-    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7)
+    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7, httponly=True,
+                    secure=IS_PRODUCTION, samesite="lax")
     return resp
 
 
@@ -398,41 +585,92 @@ async def finalizar_pedido(request: Request, customer_name: str = Form(...),
                            customer_phone: str = Form(...), address: str = Form(...),
                            payment_method: str = Form("pix")):
     user = get_current_user(request)
-    cart = get_cart(request)
-    if not cart:
-        return RedirectResponse(url="/loja", status_code=303)
+    customer_name, customer_phone, address = customer_name.strip(), customer_phone.strip(), address.strip()
+    if not customer_name or not customer_phone or not address or len(customer_name) > 120 or len(customer_phone) > 40 or len(address) > 500:
+        return JSONResponse({"ok": False, "error": "Preencha os dados de entrega corretamente."}, status_code=400)
+    if payment_method not in {"pix", "dinheiro", "cartao"}:
+        return JSONResponse({"ok": False, "error": "Forma de pagamento inválida."}, status_code=400)
+    raw_cart = get_cart(request)
+    try:
+        cart_map = {}
+        for item in raw_cart:
+            if not isinstance(item, dict):
+                raise ValueError()
+            pid, qty = int(item["product_id"]), int(item["qty"])
+            if pid <= 0 or qty <= 0 or qty > 20:
+                raise ValueError()
+            cart_map[pid] = cart_map.get(pid, 0) + qty
+        if not cart_map or len(cart_map) > 50 or any(qty > 20 for qty in cart_map.values()):
+            raise ValueError()
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Carrinho inválido. Revise os produtos e quantidades."}, status_code=400)
     db = get_db()
-    total = cart_total(cart, db)
-    user_id = user["user_id"] if user else None
-    cur = db.execute("""
-        INSERT INTO orders (user_id, customer_name, customer_phone, address, total, payment_method, status)
-        VALUES (?,?,?,?,?,?, 'paid')
-    """, (user_id, customer_name, customer_phone, address, total, payment_method))
-    order_id = cur.lastrowid
-    for item in cart:
-        p = db.execute("SELECT * FROM products WHERE id=?", (item["product_id"],)).fetchone()
-        if p:
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        verified_items = []
+        total = 0.0
+        for pid, qty in cart_map.items():
+            product = db.execute("SELECT id, name, price, stock FROM products WHERE id=? AND active=1", (pid,)).fetchone()
+            if not product or product["stock"] < qty:
+                db.rollback()
+                return JSONResponse({"ok": False, "error": "Um produto está indisponível ou sem estoque suficiente."}, status_code=409)
+            verified_items.append((product, qty))
+            total += product["price"] * qty
+        cur = db.execute("""
+            INSERT INTO orders (user_id, customer_name, customer_phone, address, total, payment_method, status)
+            VALUES (?,?,?,?,?,?, 'pending')
+        """, (user["user_id"] if user else None, customer_name, customer_phone, address, total, payment_method))
+        order_id = cur.lastrowid
+        for product, qty in verified_items:
+            changed = db.execute("UPDATE products SET stock=stock-? WHERE id=? AND stock>=? AND active=1",
+                                 (qty, product["id"], qty))
+            if changed.rowcount != 1:
+                db.rollback()
+                return JSONResponse({"ok": False, "error": "Estoque alterado durante a compra. Tente novamente."}, status_code=409)
             db.execute("INSERT INTO order_items (order_id, product_id, product_name, quantity, price) VALUES (?,?,?,?,?)",
-                       (order_id, item["product_id"], p["name"], item["qty"], p["price"]))
-            db.execute("UPDATE products SET stock = stock - ? WHERE id=?", (item["qty"], item["product_id"]))
-    db.commit()
-    db.close()
-    # Notifica o barbeiro sobre novo pedido
+                       (order_id, product["id"], product["name"], qty, product["price"]))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
     try:
         send_whatsapp_notify(f"🛍️ NOVO PEDIDO NA LOJA!\nPedido #{order_id}\nCliente: {customer_name}\nTotal: R$ {total:.2f}\nPagamento: {payment_method}")
     except Exception:
         pass
     resp = RedirectResponse(url=f"/pedido-confirmado/{order_id}", status_code=303)
     resp.delete_cookie(CART_COOKIE)
+    if not user:
+        receipt = serializer.dumps({"order_id": order_id, "purpose": "guest-order-receipt"})
+        resp.set_cookie("barbearia_order_receipt", receipt, max_age=1800, httponly=True,
+                        secure=IS_PRODUCTION, samesite="lax")
     return resp
 
 
 @app.get("/pedido-confirmado/{order_id}", response_class=HTMLResponse)
 def pedido_confirmado(request: Request, order_id: int):
+    user = get_current_user(request)
     db = get_db()
     order = db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+    if not order:
+        db.close()
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    owns_order = bool(user and user.get("user_id") == order["user_id"])
+    is_admin = bool(user and user.get("role") == "admin")
+    guest_receipt_valid = False
+    if order["user_id"] is None:
+        receipt = request.cookies.get("barbearia_order_receipt", "")
+        try:
+            receipt_data = serializer.loads(receipt, max_age=1800)
+            guest_receipt_valid = (receipt_data.get("purpose") == "guest-order-receipt"
+                                   and receipt_data.get("order_id") == order_id)
+        except Exception:
+            guest_receipt_valid = False
+    if not (owns_order or is_admin or guest_receipt_valid):
+        db.close()
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
     items = db.execute("SELECT * FROM order_items WHERE order_id=?", (order_id,)).fetchall()
-    user = get_current_user(request)
     db.close()
     return templates.TemplateResponse("pedido_confirmado.html", {
         "request": request, "user": user, "order": order, "items": items,
@@ -571,12 +809,25 @@ def admin_agenda(request: Request, date: Optional[str] = None):
 async def admin_agenda_status(request: Request):
     user = get_current_user(request)
     if not user or user.get("role") not in ("admin", "barber"):
-        return JSONResponse({"ok": False}, status_code=401)
-    data = await request.json()
+        return JSONResponse({"ok": False, "error": "Acesso não autorizado."}, status_code=403)
+    try:
+        data = await request.json()
+        appointment_id = int(data["appointment_id"])
+        status = str(data["status"]).strip().lower()
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Dados inválidos."}, status_code=400)
+    if status not in {"scheduled", "completed", "cancelled"}:
+        return JSONResponse({"ok": False, "error": "Status inválido."}, status_code=400)
     db = get_db()
-    db.execute("UPDATE appointments SET status=? WHERE id=?", (data["status"], data["appointment_id"]))
-    db.commit()
-    db.close()
+    try:
+        updated = db.execute("UPDATE appointments SET status=? WHERE id=?",
+                             (status, appointment_id))
+        if updated.rowcount != 1:
+            db.rollback()
+            return JSONResponse({"ok": False, "error": "Agendamento não encontrado."}, status_code=404)
+        db.commit()
+    finally:
+        db.close()
     return JSONResponse({"ok": True})
 
 
@@ -725,7 +976,7 @@ def admin_pedidos(request: Request):
 @app.get("/admin/configuracoes", response_class=HTMLResponse)
 def admin_configuracoes(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
     settings = get_settings()
     return templates.TemplateResponse("admin/configuracoes.html", {
@@ -736,16 +987,29 @@ def admin_configuracoes(request: Request):
 @app.post("/admin/configuracoes/salvar")
 async def admin_configuracoes_salvar(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
     form = await request.form()
+    allowed_keys = {"shop_name", "shop_slogan", "logo_url", "color_primary",
+                    "color_primary_light", "color_bg", "color_card", "color_text",
+                    "whatsapp", "instagram", "address", "whatsapp_notify",
+                    "whatsapp_api_url"}
     db = get_db()
-    for key in form:
-        db.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
-                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                   (key, form[key]))
-    db.commit()
-    db.close()
+    try:
+        for key in allowed_keys.intersection(form.keys()):
+            value = str(form[key]).strip()[:2000]
+            if key in {"whatsapp_api_url"} and value:
+                from urllib.parse import urlsplit
+                parsed = urlsplit(value)
+                if parsed.scheme != "https" or not parsed.hostname:
+                    db.close()
+                    return RedirectResponse(url="/admin/configuracoes?erro=url", status_code=303)
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
+                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                       (key, value))
+        db.commit()
+    finally:
+        db.close()
     return RedirectResponse(url="/admin/configuracoes?salvo=1", status_code=303)
 
 
@@ -753,7 +1017,7 @@ async def admin_configuracoes_salvar(request: Request):
 @app.get("/admin/barbeiros", response_class=HTMLResponse)
 def admin_barbeiros(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
     db = get_db()
     barbers = [dict(r) for r in db.execute("""
@@ -770,7 +1034,7 @@ def admin_barbeiros(request: Request):
 @app.post("/admin/barbeiros/salvar")
 async def admin_barbeiro_salvar(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
     form = await request.form()
     name = form.get("name", "").strip()
@@ -779,8 +1043,14 @@ async def admin_barbeiro_salvar(request: Request):
     db = get_db()
     barber_id = form.get("barber_id")
     work_days = json.dumps([int(d) for d in form.getlist("work_days")] or [1,2,3,4,5,6])
-    email = form.get("email", "").strip()
-    password = form.get("password", "").strip()
+    email = form.get("email", "").strip().lower()
+    password = form.get("password", "")
+    if email and ("@" not in email or len(email) > 254):
+        db.close()
+        return RedirectResponse(url="/admin/barbeiros?erro=email", status_code=303)
+    if password and len(password) < 8:
+        db.close()
+        return RedirectResponse(url="/admin/barbeiros?erro=senha", status_code=303)
 
     if barber_id:
         db.execute("""UPDATE barbers SET name=?, bio=?, photo_url=?, work_start=?, work_end=?,
@@ -792,7 +1062,7 @@ async def admin_barbeiro_salvar(request: Request):
         if email and password:
             existing = db.execute("SELECT user_id FROM barbers WHERE id=?", (barber_id,)).fetchone()
             if existing and existing["user_id"]:
-                db.execute("UPDATE users SET email=?, password_hash=?, name=? WHERE id=?",
+                db.execute("UPDATE users SET email=?, password_hash=?, name=?, session_version=session_version+1 WHERE id=?",
                            (email, hash_password(password), name, existing["user_id"]))
             else:
                 cur = db.execute("INSERT INTO users (name, email, password_hash, role) VALUES (?,?,?,?)",
@@ -817,7 +1087,7 @@ async def admin_barbeiro_salvar(request: Request):
 @app.post("/admin/barbeiros/excluir")
 async def admin_barbeiro_excluir(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
     form = await request.form()
     db = get_db()
@@ -866,6 +1136,14 @@ def manifest():
         "theme_color": settings["color_primary"],
         "icons": [{"src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230f0f0f'/><text x='50' y='65' font-size='50' text-anchor='middle' fill='%23c9a227' font-weight='bold'>✂</text></svg>", "sizes": "192x192", "type": "image/svg+xml"}],
     }
+
+
+# Rotas incrementais de clientes, alteração e recuperação de senha.
+from security_routes import register_security_routes
+
+register_security_routes(
+    app, templates, get_db, get_current_user, hash_password, verify_password
+)
 
 
 if __name__ == "__main__":

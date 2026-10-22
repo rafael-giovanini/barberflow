@@ -151,6 +151,46 @@ def init_db():
     )
     """)
 
+    # Migração compatível: acrescenta campos sem remover ou recriar registros.
+    user_columns = {row["name"] for row in c.execute("PRAGMA table_info(users)").fetchall()}
+    if "active" not in user_columns:
+        c.execute("ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+    if "session_version" not in user_columns:
+        c.execute("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0")
+
+    # Tentativas de autenticação para limitação de força bruta, persistentes entre reinicializações.
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS auth_login_attempts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL,
+        client_ip TEXT NOT NULL,
+        attempted_at TEXT NOT NULL,
+        succeeded INTEGER NOT NULL DEFAULT 0
+    )
+    """)
+    c.execute("""
+    CREATE INDEX IF NOT EXISTS idx_auth_login_attempts_lookup
+    ON auth_login_attempts(email, client_ip, attempted_at, succeeded)
+    """)
+
+    # Tokens de recuperação: apenas o hash é armazenado; o token em claro só vai por e-mail.
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        email TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        used_at TEXT,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    """)
+    c.execute("""
+    CREATE INDEX IF NOT EXISTS idx_password_reset_email_created
+    ON password_reset_tokens(email, created_at)
+    """)
+
     conn.commit()
 
     # Sempre garante configurações padrão
@@ -259,18 +299,32 @@ def seed_data(conn):
     for p in portfolio:
         c.execute("INSERT INTO portfolio (name, description, image_url, category, service_id) VALUES (?,?,?,?,?)", p)
 
-    # Barbeiro padrão (admin) - senha: admin123
-    from auth import hash_password
-    admin_hash = hash_password("admin123")
-    c.execute("INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
-              ("Barbeiro Chefe", "admin@barbearia.com", "18999999999", admin_hash, "admin"))
-    admin_id = c.lastrowid
-    c.execute("INSERT INTO barbers (user_id, name, bio, active) VALUES (?,?,?,?)",
-              (admin_id, "Barbeiro Chefe", "Especialista em cortes modernos e degradê há 10 anos.", 1))
+    # Cria conta administrativa somente quando credenciais são configuradas no ambiente.
+    # Nunca inserir uma senha padrão conhecida em uma instalação nova.
+    import os
+    admin_email = os.getenv("INITIAL_ADMIN_EMAIL", "").strip().lower()
+    admin_password = os.getenv("INITIAL_ADMIN_PASSWORD", "")
+    if admin_email and admin_password:
+        from auth import hash_password
+        existing_admin = c.execute(
+            "SELECT id FROM users WHERE role='admin' LIMIT 1"
+        ).fetchone()
+        if not existing_admin:
+            admin_hash = hash_password(admin_password)
+            c.execute(
+                "INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
+                ("Administrador", admin_email, "", admin_hash, "admin")
+            )
+            admin_id = c.lastrowid
+            c.execute(
+                "INSERT INTO barbers (user_id, name, bio, active) VALUES (?,?,?,?)",
+                (admin_id, "Administrador", "", 1)
+            )
 
     conn.commit()
-    print("✅ Dados iniciais inseridos!")
-    print("   Login admin: admin@barbearia.com / senha: admin123")
+    print("Dados iniciais inseridos.")
+    if not (admin_email and admin_password):
+        print("Configure INITIAL_ADMIN_EMAIL e INITIAL_ADMIN_PASSWORD para criar o administrador inicial.")
 
 
 if __name__ == "__main__":

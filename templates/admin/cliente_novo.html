@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Cadastrar cliente — BarberFlow{% endblock %}
+{% block content %}
+<section class="section container" style="max-width:760px;">
+  <div class="form-card">
+    <h2 class="section-title">Cadastrar cliente</h2>
+    <p class="text-muted">Cadastre os dados do cliente para que ele possa acessar a própria conta e realizar agendamentos.</p>
+    {% if request.query_params.get('salvo') %}
+      <div class="success-msg">Cliente cadastrado com sucesso.</div>
+    {% endif %}
+    {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
+    <form method="post" action="/admin/clientes/novo">
+      <div class="form-group">
+        <label for="name">Nome completo</label>
+        <input id="name" type="text" name="name" class="form-control" value="{{ name }}" maxlength="120" autocomplete="name" required>
+      </div>
+      <div class="form-group">
+        <label for="email">E-mail</label>
+        <input id="email" type="email" name="email" class="form-control" value="{{ email }}" maxlength="254" autocomplete="email" required>
+      </div>
+      <div class="form-group">
+        <label for="phone">Telefone / WhatsApp</label>
+        <input id="phone" type="tel" name="phone" class="form-control" value="{{ phone }}" maxlength="40" autocomplete="tel">
+      </div>
+      <div class="form-group">
+        <label for="password">Senha inicial</label>
+        <input id="password" type="password" name="password" class="form-control" minlength="6" autocomplete="new-password" required>
+        <small>Informe uma senha com pelo menos 6 caracteres e compartilhe-a com o cliente de forma segura.</small>
+      </div>
+      <div class="form-group">
+        <label for="confirm_password">Confirmar senha</label>
+        <input id="confirm_password" type="password" name="confirm_password" class="form-control" minlength="6" autocomplete="new-password" required>
+      </div>
+      <button type="submit" class="btn btn-dourado btn-block">Cadastrar cliente</button>
+    </form>
+    {% if user.role == 'admin' %}
+      <p class="text-center mt-2"><a href="/admin/clientes">Voltar à gestão de clientes</a></p>
+    {% else %}
+      <p class="text-center mt-2"><a href="/admin">Voltar ao painel</a></p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}
