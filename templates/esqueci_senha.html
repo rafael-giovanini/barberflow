@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Recuperar senha — BarberFlow{% endblock %}
+{% block content %}
+<div class="form-card">
+  <h2>Recuperar senha</h2>
+  <p class="text-muted">Informe o e-mail usado no cadastro. Se a conta existir e o envio estiver configurado, enviaremos um link temporário.</p>
+  {% if sent %}<div class="success-msg">Se o endereço estiver cadastrado e a recuperação estiver configurada, você receberá instruções por e-mail.</div>
+  {% else %}
+  <form method="post" action="/esqueci-senha">
+    <div class="form-group"><label for="email">E-mail</label><input id="email" type="email" name="email" class="form-control" autocomplete="email" required maxlength="254"></div>
+    <button type="submit" class="btn btn-dourado btn-block">Enviar instruções</button>
+  </form>
+  {% endif %}
+  <p class="text-center mt-2"><a href="/login">Voltar ao login</a></p>
+</div>
+{% endblock %}
