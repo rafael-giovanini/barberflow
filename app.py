@@ -4,6 +4,7 @@ FastAPI + SQLite + Templates Jinja2
 """
 import json
 import os
+import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -33,7 +34,9 @@ async def inject_settings(request: Request, call_next):
     response = await call_next(request)
     return response
 
-SECRET_KEY = "troque-esta-chave-por-uma-secreta-sua-2024"
+# Em desenvolvimento, a chave aleatória evita um segredo fixo no código.
+# Em produção, defina SECRET_KEY com um valor aleatório persistente no ambiente.
+SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_urlsafe(48)
 serializer = URLSafeTimedSerializer(SECRET_KEY)
 
 COOKIE_NAME = "barbearia_session"
@@ -210,6 +213,14 @@ def cadastro_page(request: Request):
 @app.post("/cadastro")
 def cadastro(request: Request, name: str = Form(...), email: str = Form(...),
              phone: str = Form(""), password: str = Form(...)):
+    name = name.strip()
+    email = email.strip().lower()
+    phone = phone.strip()
+    if not name or "@" not in email or len(password) < 10:
+        return templates.TemplateResponse("cadastro.html", {
+            "request": request, "user": None,
+            "error": "Informe nome e e-mail válidos e uma senha com pelo menos 10 caracteres."
+        })
     db = get_db()
     existing = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
     if existing:
