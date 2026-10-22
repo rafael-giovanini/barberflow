@@ -3,6 +3,7 @@ Sistema de Barbearia - Aplicação Principal
 FastAPI + SQLite + Templates Jinja2
 """
 import json
+import os
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -41,8 +42,22 @@ CART_COOKIE = "barbearia_cart"
 
 # ---------- Helpers de autenticação ----------
 def set_session(response, user_id: int, role: str, name: str):
-    token = serializer.dumps({"user_id": user_id, "role": role, "name": name})
-    response.set_cookie(COOKIE_NAME, token, httponly=True, max_age=86400 * 30)
+    db = get_db()
+    row = db.execute(
+        "SELECT session_version, active FROM users WHERE id=?", (user_id,)
+    ).fetchone()
+    db.close()
+    if not row or not row["active"]:
+        return
+    token = serializer.dumps({
+        "user_id": user_id, "role": role, "name": name,
+        "session_version": row["session_version"],
+    })
+    response.set_cookie(
+        COOKIE_NAME, token, httponly=True, max_age=86400 * 30,
+        secure=os.getenv("COOKIE_SECURE", "0").lower() in ("1", "true", "yes"),
+        samesite="lax",
+    )
 
 
 def get_current_user(request: Request):
@@ -51,6 +66,19 @@ def get_current_user(request: Request):
         return None
     try:
         data = serializer.loads(token, max_age=86400 * 30)
+        # Sessões antigas ou revogadas deixam de ser aceitas após troca de senha
+        # ou desativação da conta.
+        db = get_db()
+        row = db.execute(
+            "SELECT role, name, active, session_version FROM users WHERE id=?",
+            (data.get("user_id"),),
+        ).fetchone()
+        db.close()
+        if (not row or not row["active"]
+                or data.get("session_version") != row["session_version"]):
+            return None
+        data["role"] = row["role"]
+        data["name"] = row["name"]
         return data
     except Exception:
         return None
@@ -210,7 +238,8 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
     db = get_db()
     user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
     db.close()
-    if not user or not verify_password(password, user["password_hash"]):
+    if (not user or not user["active"]
+            or not verify_password(password, user["password_hash"])):
         return templates.TemplateResponse("login.html", {
             "request": request, "user": None, "error": "E-mail ou senha inválidos."
         })
@@ -866,6 +895,14 @@ def manifest():
         "theme_color": settings["color_primary"],
         "icons": [{"src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230f0f0f'/><text x='50' y='65' font-size='50' text-anchor='middle' fill='%23c9a227' font-weight='bold'>✂</text></svg>", "sizes": "192x192", "type": "image/svg+xml"}],
     }
+
+
+# Rotas incrementais de clientes, alteração e recuperação de senha.
+from security_routes import register_security_routes
+
+register_security_routes(
+    app, templates, get_db, get_current_user, hash_password, verify_password
+)
 
 
 if __name__ == "__main__":
