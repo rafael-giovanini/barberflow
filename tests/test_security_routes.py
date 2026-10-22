@@ -214,5 +214,59 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(self._login("cliente@example.test", "SenhaTeste-123").status_code, 200)
 
 
+    def test_customer_cannot_change_another_customer_status(self):
+        self._login("cliente@example.test")
+        db = self.app_module.get_db()
+        target = db.execute(
+            "SELECT id, active FROM users WHERE email=?",
+            ("outro@example.test",),
+        ).fetchone()
+        db.close()
+
+        response = self.client.post("/admin/clientes/status", data={
+            "customer_id": target["id"],
+            "active": "0",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/login")
+
+        db = self.app_module.get_db()
+        unchanged = db.execute(
+            "SELECT active FROM users WHERE id=?", (target["id"],)
+        ).fetchone()
+        db.close()
+        self.assertEqual(unchanged["active"], target["active"])
+
+    def test_admin_deactivation_revokes_existing_customer_session(self):
+        self._login("admin@example.test")
+        db = self.app_module.get_db()
+        target = db.execute(
+            "SELECT id FROM users WHERE email=?", ("cliente@example.test",)
+        ).fetchone()
+        db.close()
+
+        # Confirma que o cliente tinha uma sessão válida antes da desativação.
+        customer_client = TestClient(self.app_module.app, follow_redirects=False)
+        try:
+            customer_client.post(
+                "/login",
+                data={"email": "cliente@example.test", "password": "SenhaTeste-123"},
+            )
+            self.assertEqual(customer_client.get("/minha-conta").status_code, 200)
+
+            response = self.client.post("/admin/clientes/status", data={
+                "customer_id": target["id"],
+                "active": "0",
+            })
+            self.assertEqual(response.status_code, 303)
+
+            # A sessão já emitida também deve deixar de ser aceita.
+            account_page = customer_client.get("/minha-conta")
+            self.assertEqual(account_page.status_code, 303)
+            self.assertEqual(account_page.headers["location"], "/login")
+        finally:
+            customer_client.close()
+
+
 if __name__ == "__main__":
     unittest.main()
