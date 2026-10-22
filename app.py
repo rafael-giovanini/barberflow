@@ -216,10 +216,10 @@ def cadastro(request: Request, name: str = Form(...), email: str = Form(...),
     name = name.strip()
     email = email.strip().lower()
     phone = phone.strip()
-    if not name or "@" not in email or len(password) < 10:
+    if not name or "@" not in email or len(password) < 6:
         return templates.TemplateResponse("cadastro.html", {
             "request": request, "user": None,
-            "error": "Informe nome e e-mail válidos e uma senha com pelo menos 10 caracteres."
+            "error": "Informe nome e e-mail válidos e uma senha com pelo menos 6 caracteres."
         })
     db = get_db()
     existing = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
