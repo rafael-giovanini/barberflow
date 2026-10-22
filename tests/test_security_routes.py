@@ -268,5 +268,95 @@ class SecurityRouteTests(unittest.TestCase):
             customer_client.close()
 
 
+    def test_duplicate_email_does_not_overwrite_another_customer(self):
+        self._login("admin@example.test")
+        db = self.app_module.get_db()
+        target = db.execute(
+            "SELECT id, name, email, phone FROM users WHERE email=?",
+            ("cliente@example.test",),
+        ).fetchone()
+        db.close()
+
+        response = self.client.post("/admin/clientes/salvar", data={
+            "customer_id": target["id"],
+            "name": "Nome que não deve ser salvo",
+            "email": "outro@example.test",
+            "phone": "11999999999",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/admin/clientes?erro=email")
+
+        db = self.app_module.get_db()
+        unchanged = db.execute(
+            "SELECT name, email, phone FROM users WHERE id=?", (target["id"],)
+        ).fetchone()
+        db.close()
+        self.assertEqual(dict(unchanged), {
+            "name": target["name"],
+            "email": target["email"],
+            "phone": target["phone"],
+        })
+
+    def test_invalid_customer_data_is_rejected_without_changes(self):
+        self._login("admin@example.test")
+        db = self.app_module.get_db()
+        target = db.execute(
+            "SELECT id, name, email, phone FROM users WHERE email=?",
+            ("cliente@example.test",),
+        ).fetchone()
+        db.close()
+
+        response = self.client.post("/admin/clientes/salvar", data={
+            "customer_id": target["id"],
+            "name": "   ",
+            "email": "email-invalido",
+            "phone": "11999999999",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/admin/clientes?erro=dados")
+
+        db = self.app_module.get_db()
+        unchanged = db.execute(
+            "SELECT name, email, phone FROM users WHERE id=?", (target["id"],)
+        ).fetchone()
+        db.close()
+        self.assertEqual(dict(unchanged), {
+            "name": target["name"],
+            "email": target["email"],
+            "phone": target["phone"],
+        })
+
+    def test_customer_edit_route_cannot_modify_admin_or_barber_accounts(self):
+        self._login("admin@example.test")
+        db = self.app_module.get_db()
+        targets = db.execute(
+            "SELECT id, name, email, phone, role FROM users WHERE role IN ('admin', 'barber')"
+        ).fetchall()
+        db.close()
+
+        for target in targets:
+            with self.subTest(role=target["role"], email=target["email"]):
+                response = self.client.post("/admin/clientes/salvar", data={
+                    "customer_id": target["id"],
+                    "name": "Conta alterada indevidamente",
+                    "email": "alterada@example.test",
+                    "phone": "11999999999",
+                })
+                self.assertEqual(response.status_code, 303)
+
+                db = self.app_module.get_db()
+                unchanged = db.execute(
+                    "SELECT name, email, phone, role FROM users WHERE id=?",
+                    (target["id"],),
+                ).fetchone()
+                db.close()
+                self.assertEqual(dict(unchanged), {
+                    "name": target["name"],
+                    "email": target["email"],
+                    "phone": target["phone"],
+                    "role": target["role"],
+                })
+
+
 if __name__ == "__main__":
     unittest.main()
