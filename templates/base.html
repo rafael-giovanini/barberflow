@@ -46,7 +46,12 @@
         {% if user %}
           {% if user.role in ['admin', 'barber'] %}
             <li><a href="/admin">Painel</a></li>
-            {% if user.role == 'admin' %}<li><a href="/admin/clientes">Clientes</a></li>{% endif %}
+            {% if user.role == 'admin' %}
+              <li><a href="/admin/clientes">Clientes</a></li>
+              <li><a href="/admin/clientes/novo">Cadastrar cliente</a></li>
+            {% else %}
+              <li><a href="/admin/clientes/novo">Cadastrar cliente</a></li>
+            {% endif %}
           {% else %}
             <li><a href="/area-cliente">Minha Área</a></li>
           {% endif %}
