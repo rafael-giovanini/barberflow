@@ -291,6 +291,17 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
 
     user = db.execute("SELECT * FROM users WHERE email=?", (normalized_email,)).fetchone()
     valid = bool(user and user["active"] and verify_password(password, user["password_hash"]))
+    if valid:
+        # Atualiza hashes legados no próximo login válido, sem exigir redefinição
+        # de senha nem invalidar a sessão recém-criada.
+        try:
+            stored_iterations = int(user["password_hash"].split("$", 3)[1])
+        except (IndexError, TypeError, ValueError):
+            stored_iterations = 0
+        if stored_iterations < 600_000:
+            upgraded_hash = hash_password(password)
+            db.execute("UPDATE users SET password_hash=? WHERE id=?",
+                       (upgraded_hash, user["id"]))
     db.execute(
         "INSERT INTO auth_login_attempts (email, client_ip, attempted_at, succeeded) VALUES (?, ?, ?, ?)",
         (normalized_email, client_ip, now.isoformat(), 1 if valid else 0),
