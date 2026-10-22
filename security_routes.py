@@ -86,7 +86,7 @@ def register_security_routes(app, templates, get_db, get_current_user,
             return RedirectResponse(url="/login", status_code=303)
         db = get_db()
         db.execute("""
-            UPDATE users SET active=?
+            UPDATE users SET active=?, session_version=session_version+1
             WHERE id=? AND role='customer'
         """, (1 if active else 0, customer_id))
         db.commit()
@@ -240,14 +240,24 @@ def register_security_routes(app, templates, get_db, get_current_user,
             db.close()
             return render(request, "redefinir_senha.html", None, token="", valid=False,
                           error="O link é inválido, expirou ou já foi utilizado.")
-        db.execute("""
+        # Consome o token atomicamente antes de alterar a senha, impedindo reutilização.
+        consumed = db.execute("""
+            UPDATE password_reset_tokens SET used_at=?
+            WHERE id=? AND used_at IS NULL AND expires_at > ?
+        """, (now, row["id"], now))
+        if consumed.rowcount != 1:
+            db.close()
+            return render(request, "redefinir_senha.html", None, token="", valid=False,
+                          error="O link é inválido, expirou ou já foi utilizado.")
+        updated = db.execute("""
             UPDATE users SET password_hash=?, session_version=session_version+1
             WHERE id=? AND active=1
         """, (hash_password(new_password), row["user_id"]))
-        db.execute("""
-            UPDATE password_reset_tokens SET used_at=?
-            WHERE id=? AND used_at IS NULL
-        """, (now, row["id"]))
+        if updated.rowcount != 1:
+            db.commit()
+            db.close()
+            return render(request, "redefinir_senha.html", None, token="", valid=False,
+                          error="Não foi possível redefinir a senha desta conta.")
         db.execute("""
             UPDATE password_reset_tokens SET used_at=?
             WHERE user_id=? AND used_at IS NULL
