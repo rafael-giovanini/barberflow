@@ -469,5 +469,29 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual([dict(row) for row in after], [dict(row) for row in before])
 
 
+    def test_security_headers_are_present_on_responses(self):
+        response = self.client.get("/login")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        self.assertEqual(response.headers["x-frame-options"], "DENY")
+        self.assertEqual(response.headers["referrer-policy"], "strict-origin-when-cross-origin")
+        self.assertEqual(response.headers["cache-control"], "no-store")
+
+    def test_repeated_failed_logins_are_rate_limited(self):
+        for _ in range(10):
+            response = self._login("cliente@example.test", "senha-incorreta")
+            self.assertEqual(response.status_code, 200)
+        blocked = self._login("cliente@example.test", "SenhaTeste-123")
+        self.assertEqual(blocked.status_code, 429)
+        self.assertIn("Muitas tentativas de acesso", blocked.text)
+
+    def test_successful_login_sets_http_only_lax_cookie(self):
+        response = self._login("cliente@example.test")
+        self.assertEqual(response.status_code, 303)
+        cookie = response.headers.get("set-cookie", "")
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=lax", cookie)
+
+
 if __name__ == "__main__":
     unittest.main()
