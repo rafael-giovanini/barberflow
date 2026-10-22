@@ -192,5 +192,27 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(self._login("cliente@example.test", "SenhaTeste-123").status_code, 303)
 
 
+    def test_successful_password_change_revokes_session_and_requires_new_login(self):
+        self._login("cliente@example.test")
+        response = self.client.post("/minha-conta/senha", data={
+            "current_password": "SenhaTeste-123",
+            "new_password": "SenhaNova-456",
+            "confirm_password": "SenhaNova-456",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/login?senha_alterada=1")
+        self.assertNotIn("barbearia_session", self.client.cookies)
+
+        # A sessão anterior não deve continuar autorizada após a troca.
+        account_page = self.client.get("/minha-conta")
+        self.assertEqual(account_page.status_code, 303)
+        self.assertEqual(account_page.headers["location"], "/login")
+
+        # A senha nova funciona e a anterior deixa de funcionar.
+        self.assertEqual(self._login("cliente@example.test", "SenhaNova-456").status_code, 303)
+        self.client.get("/logout")
+        self.assertEqual(self._login("cliente@example.test", "SenhaTeste-123").status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main()
