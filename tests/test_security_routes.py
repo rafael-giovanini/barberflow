@@ -536,5 +536,32 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertTrue(verify_password("SenhaTeste-123", new_hash))
 
 
+    def test_successful_login_upgrades_legacy_password_hash(self):
+        import hashlib
+        legacy_hash = "pbkdf2$100000$73616c74$" + hashlib.pbkdf2_hmac(
+            "sha256", b"SenhaTeste-123", b"73616c74", 100000
+        ).hex()
+        db = self.app_module.get_db()
+        db.execute(
+            "UPDATE users SET password_hash=? WHERE email=?",
+            (legacy_hash, "cliente@example.test"),
+        )
+        db.commit()
+        db.close()
+
+        response = self._login("cliente@example.test", "SenhaTeste-123")
+        self.assertEqual(response.status_code, 303)
+
+        db = self.app_module.get_db()
+        stored_hash = db.execute(
+            "SELECT password_hash FROM users WHERE email=?",
+            ("cliente@example.test",),
+        ).fetchone()["password_hash"]
+        db.close()
+        self.assertTrue(stored_hash.startswith("pbkdf2$600000$"))
+        from auth import verify_password
+        self.assertTrue(verify_password("SenhaTeste-123", stored_hash))
+
+
 if __name__ == "__main__":
     unittest.main()
