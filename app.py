@@ -553,32 +553,66 @@ async def finalizar_pedido(request: Request, customer_name: str = Form(...),
                            customer_phone: str = Form(...), address: str = Form(...),
                            payment_method: str = Form("pix")):
     user = get_current_user(request)
-    cart = get_cart(request)
-    if not cart:
-        return RedirectResponse(url="/loja", status_code=303)
+    customer_name, customer_phone, address = customer_name.strip(), customer_phone.strip(), address.strip()
+    if not customer_name or not customer_phone or not address or len(customer_name) > 120 or len(customer_phone) > 40 or len(address) > 500:
+        return JSONResponse({"ok": False, "error": "Preencha os dados de entrega corretamente."}, status_code=400)
+    if payment_method not in {"pix", "dinheiro", "cartao"}:
+        return JSONResponse({"ok": False, "error": "Forma de pagamento inválida."}, status_code=400)
+    raw_cart = get_cart(request)
+    try:
+        cart_map = {}
+        for item in raw_cart:
+            if not isinstance(item, dict):
+                raise ValueError()
+            pid, qty = int(item["product_id"]), int(item["qty"])
+            if pid <= 0 or qty <= 0 or qty > 20:
+                raise ValueError()
+            cart_map[pid] = cart_map.get(pid, 0) + qty
+        if not cart_map or len(cart_map) > 50 or any(qty > 20 for qty in cart_map.values()):
+            raise ValueError()
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Carrinho inválido. Revise os produtos e quantidades."}, status_code=400)
     db = get_db()
-    total = cart_total(cart, db)
-    user_id = user["user_id"] if user else None
-    cur = db.execute("""
-        INSERT INTO orders (user_id, customer_name, customer_phone, address, total, payment_method, status)
-        VALUES (?,?,?,?,?,?, 'paid')
-    """, (user_id, customer_name, customer_phone, address, total, payment_method))
-    order_id = cur.lastrowid
-    for item in cart:
-        p = db.execute("SELECT * FROM products WHERE id=?", (item["product_id"],)).fetchone()
-        if p:
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        verified_items = []
+        total = 0.0
+        for pid, qty in cart_map.items():
+            product = db.execute("SELECT id, name, price, stock FROM products WHERE id=? AND active=1", (pid,)).fetchone()
+            if not product or product["stock"] < qty:
+                db.rollback()
+                return JSONResponse({"ok": False, "error": "Um produto está indisponível ou sem estoque suficiente."}, status_code=409)
+            verified_items.append((product, qty))
+            total += product["price"] * qty
+        cur = db.execute("""
+            INSERT INTO orders (user_id, customer_name, customer_phone, address, total, payment_method, status)
+            VALUES (?,?,?,?,?,?, 'pending')
+        """, (user["user_id"] if user else None, customer_name, customer_phone, address, total, payment_method))
+        order_id = cur.lastrowid
+        for product, qty in verified_items:
+            changed = db.execute("UPDATE products SET stock=stock-? WHERE id=? AND stock>=? AND active=1",
+                                 (qty, product["id"], qty))
+            if changed.rowcount != 1:
+                db.rollback()
+                return JSONResponse({"ok": False, "error": "Estoque alterado durante a compra. Tente novamente."}, status_code=409)
             db.execute("INSERT INTO order_items (order_id, product_id, product_name, quantity, price) VALUES (?,?,?,?,?)",
-                       (order_id, item["product_id"], p["name"], item["qty"], p["price"]))
-            db.execute("UPDATE products SET stock = stock - ? WHERE id=?", (item["qty"], item["product_id"]))
-    db.commit()
-    db.close()
-    # Notifica o barbeiro sobre novo pedido
+                       (order_id, product["id"], product["name"], qty, product["price"]))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
     try:
         send_whatsapp_notify(f"🛍️ NOVO PEDIDO NA LOJA!\nPedido #{order_id}\nCliente: {customer_name}\nTotal: R$ {total:.2f}\nPagamento: {payment_method}")
     except Exception:
         pass
     resp = RedirectResponse(url=f"/pedido-confirmado/{order_id}", status_code=303)
     resp.delete_cookie(CART_COOKIE)
+    if not user:
+        receipt = serializer.dumps({"order_id": order_id, "purpose": "guest-order-receipt"})
+        resp.set_cookie("barbearia_order_receipt", receipt, max_age=1800, httponly=True,
+                        secure=IS_PRODUCTION, samesite="lax")
     return resp
 
 
@@ -587,12 +621,21 @@ def pedido_confirmado(request: Request, order_id: int):
     user = get_current_user(request)
     db = get_db()
     order = db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
-    if not order or (order["user_id"] is not None and
-                     (not user or user.get("user_id") != order["user_id"]) and
-                     (not user or user.get("role") != "admin")):
+    if not order:
         db.close()
         raise HTTPException(status_code=404, detail="Pedido não encontrado")
-    if order["user_id"] is None and (not user or user.get("role") != "admin"):
+    owns_order = bool(user and user.get("user_id") == order["user_id"])
+    is_admin = bool(user and user.get("role") == "admin")
+    guest_receipt_valid = False
+    if order["user_id"] is None:
+        receipt = request.cookies.get("barbearia_order_receipt", "")
+        try:
+            receipt_data = serializer.loads(receipt, max_age=1800)
+            guest_receipt_valid = (receipt_data.get("purpose") == "guest-order-receipt"
+                                   and receipt_data.get("order_id") == order_id)
+        except Exception:
+            guest_receipt_valid = False
+    if not (owns_order or is_admin or guest_receipt_valid):
         db.close()
         raise HTTPException(status_code=404, detail="Pedido não encontrado")
     items = db.execute("SELECT * FROM order_items WHERE order_id=?", (order_id,)).fetchall()
