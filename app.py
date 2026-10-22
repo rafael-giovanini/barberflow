@@ -29,8 +29,21 @@ templates.env.filters["from_json"] = lambda s: _json.loads(s) if s else []
 
 @app.middleware("http")
 async def inject_settings(request: Request, call_next):
-    """Injeta as configurações (cores, nome, logo) em todas as páginas."""
+    """Injeta configurações e aplica validações defensivas globais."""
     request.state.settings = get_settings()
+
+    # Rejeita POSTs com Origin explicitamente externo; complementa SameSite=Lax.
+    # Requisições sem Origin (ex.: clientes de teste/integrações) seguem o fluxo normal.
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        origin = request.headers.get("origin")
+        if origin:
+            from urllib.parse import urlsplit
+            origin_parts = urlsplit(origin)
+            request_host = request.headers.get("host", "").lower()
+            origin_host = (origin_parts.netloc or "").lower()
+            if not origin_parts.scheme or not origin_host or origin_host != request_host:
+                return JSONResponse({"detail": "Origem da requisição não permitida."}, status_code=403)
+
     response = await call_next(request)
     # Cabeçalhos defensivos aplicados também a respostas de erro e redirecionamentos.
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
