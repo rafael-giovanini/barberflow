@@ -40,7 +40,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 ### 3. Acessar
 - Site: http://localhost:8000
 - **Painel do barbeiro:** http://localhost:8000/admin
-  - A base de demonstração pode criar uma conta administrativa inicial. **Não publique nem utilize credenciais de demonstração em produção.** Configure uma senha exclusiva e forte antes de disponibilizar o sistema.
+  - Em instalações novas, configure `INITIAL_ADMIN_EMAIL` e `INITIAL_ADMIN_PASSWORD` no ambiente para criar a primeira conta administrativa; não existe mais senha padrão no código. Em bancos existentes, revise e troque manualmente qualquer credencial antiga de demonstração antes da produção.
 
 ## 🎨 Como personalizar
 
@@ -104,6 +104,7 @@ barbearia/
 - Senhas armazenadas com hash PBKDF2.
 - Sessões assinadas e cookies HTTP-only; configure `COOKIE_SECURE=1` quando estiver usando HTTPS.
 - Defina `SECRET_KEY` como variável de ambiente persistente antes da implantação. Sem ela, o ambiente de desenvolvimento gera uma chave aleatória a cada inicialização e invalida sessões após reiniciar. Nunca use o fallback de desenvolvimento em produção.
+- Em uma instalação nova, configure `INITIAL_ADMIN_EMAIL` e `INITIAL_ADMIN_PASSWORD` antes da primeira inicialização. A aplicação não cria mais uma conta com senha padrão conhecida.
 - O plano incremental e os passos de implantação estão em `docs/PLANO-MELHORIAS-CLIENTES-SENHAS.md`.
 - A recuperação de senha exige HTTPS em `APP_BASE_URL` e configuração SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, opcionalmente `SMTP_USER`, `SMTP_PASSWORD` e `SMTP_STARTTLS`). Sem isso, nenhum link de recuperação é enviado.
 - Configure `APP_BASE_URL` com a URL pública HTTPS correta; não use o sistema em produção sem validar envio de e-mail e política de cookies.
