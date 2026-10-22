@@ -40,9 +40,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 ### 3. Acessar
 - Site: http://localhost:8000
 - **Painel do barbeiro:** http://localhost:8000/admin
-  - Login: `admin@barbearia.com`
-  - Senha: `admin123`
-  - ⚠️ **Troque esta senha assim que entrar!**
+  - A base de demonstração pode criar uma conta administrativa inicial. **Não publique nem utilize credenciais de demonstração em produção.** Configure uma senha exclusiva e forte antes de disponibilizar o sistema.
 
 ## 🎨 Como personalizar
 
@@ -103,9 +101,12 @@ barbearia/
 ```
 
 ## 🔐 Segurança
-- Senhas com hash PBKDF2 (padrão bancário)
-- Sessões com cookie assinado (HTTP-only)
-- Sempre troque a `SECRET_KEY` no topo do `app.py` antes de colocar em produção
+- Senhas armazenadas com hash PBKDF2.
+- Sessões assinadas e cookies HTTP-only; configure `COOKIE_SECURE=1` quando estiver usando HTTPS.
+- A chave `SECRET_KEY` ainda precisa ser movida para uma variável de ambiente antes da implantação em produção.
+- O plano incremental e os passos de implantação estão em `docs/PLANO-MELHORIAS-CLIENTES-SENHAS.md`.
+- A recuperação de senha exige HTTPS em `APP_BASE_URL` e configuração SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, opcionalmente `SMTP_USER`, `SMTP_PASSWORD` e `SMTP_STARTTLS`). Sem isso, nenhum link de recuperação é enviado.
+- Configure `APP_BASE_URL` com a URL pública HTTPS correta; não use o sistema em produção sem validar envio de e-mail e política de cookies.
 
 ## 📞 Suporte
 Este sistema foi construído do zero e é totalmente seu. Modifique, venda, use como quiser!
