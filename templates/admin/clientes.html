@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Gestão de clientes — BarberFlow{% endblock %}
+{% block content %}
+<section class="section container" style="max-width:1100px;">
+  <h2 class="section-title">Gestão de clientes</h2>
+  <p class="section-sub">Pesquise, atualize os dados e desative contas sem excluir o histórico.</p>
+  {% if request.query_params.get('salvo') %}<div class="success-msg">Cadastro atualizado.</div>{% endif %}
+  {% if request.query_params.get('erro') %}<div class="error-msg">Não foi possível salvar. Verifique os dados e se o e-mail já está em uso.</div>{% endif %}
+  <form method="get" action="/admin/clientes" class="flex mb-4">
+    <input type="search" name="q" class="form-control" value="{{ q }}" placeholder="Nome, e-mail ou telefone" aria-label="Pesquisar clientes">
+    <button class="btn btn-dourado" type="submit">Pesquisar</button>
+  </form>
+  <p class="text-muted">Exibindo até 250 clientes. Para editar, altere os campos e salve.</p>
+  {% if not customers %}<p class="text-center text-muted">Nenhum cliente encontrado.</p>{% endif %}
+  {% for c in customers %}
+  <article class="appt-item" style="align-items:flex-start;gap:16px;flex-wrap:wrap;">
+    <form method="post" action="/admin/clientes/salvar" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;flex:1;min-width:260px;">
+      <input type="hidden" name="customer_id" value="{{ c.id }}">
+      <div class="form-group"><label for="name-{{ c.id }}">Nome</label><input id="name-{{ c.id }}" class="form-control" name="name" value="{{ c.name }}" required maxlength="120"></div>
+      <div class="form-group"><label for="email-{{ c.id }}">E-mail</label><input id="email-{{ c.id }}" class="form-control" type="email" name="email" value="{{ c.email }}" required maxlength="254"></div>
+      <div class="form-group"><label for="phone-{{ c.id }}">Telefone</label><input id="phone-{{ c.id }}" class="form-control" name="phone" value="{{ c.phone or '' }}" maxlength="40"></div>
+      <div><span class="badge">{{ 'Ativo' if c.active else 'Desativado' }}</span><button class="btn btn-dourado btn-sm" type="submit">Salvar dados</button></div>
+    </form>
+    <form method="post" action="/admin/clientes/status">
+      <input type="hidden" name="customer_id" value="{{ c.id }}">
+      <input type="hidden" name="active" value="{{ 0 if c.active else 1 }}">
+      <button class="btn btn-outline btn-sm" type="submit">{{ 'Desativar conta' if c.active else 'Reativar conta' }}</button>
+    </form>
+  </article>
+  {% endfor %}
+</section>
+{% endblock %}
