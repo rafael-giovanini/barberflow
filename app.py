@@ -447,7 +447,7 @@ async def api_agendar(request: Request):
         if (start < work_start or end > work_end or
                 (start < lunch_end and end > lunch_start) or start.minute not in (0, 30)):
             return JSONResponse({"ok": False, "error": "Horário fora da agenda de atendimento."}, status_code=400)
-        if appointment_date == datetime.now().date() and start <= datetime.now():
+        if appointment_date == datetime.now().date() and start.time() <= datetime.now().time():
             return JSONResponse({"ok": False, "error": "Não é possível agendar um horário passado."}, status_code=400)
         db.execute("BEGIN IMMEDIATE")
         conflict = db.execute("""
@@ -481,43 +481,70 @@ async def api_agendar(request: Request):
 # ---------- API: carrinho ----------
 @app.post("/api/carrinho/add")
 async def api_cart_add(request: Request):
-    data = await request.json()
+    try:
+        data = await request.json()
+        pid, qty = int(data["product_id"]), int(data.get("qty", 1))
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Produto ou quantidade inválidos."}, status_code=400)
+    if pid <= 0 or qty <= 0 or qty > 20:
+        return JSONResponse({"ok": False, "error": "A quantidade deve estar entre 1 e 20."}, status_code=400)
+    db = get_db()
+    product = db.execute("SELECT stock FROM products WHERE id=? AND active=1", (pid,)).fetchone()
+    db.close()
+    if not product or product["stock"] <= 0:
+        return JSONResponse({"ok": False, "error": "Produto indisponível."}, status_code=404)
     cart = get_cart(request)
-    pid = data["product_id"]
-    qty = data.get("qty", 1)
+    cart = [{"product_id": int(i["product_id"]), "qty": int(i["qty"])}
+            for i in cart if isinstance(i, dict) and str(i.get("product_id", "")).isdigit()
+            and str(i.get("qty", "")).isdigit() and int(i["qty"]) > 0][:50]
     found = False
     for item in cart:
         if item["product_id"] == pid:
-            item["qty"] += qty
+            item["qty"] = min(item["qty"] + qty, min(20, product["stock"]))
             found = True
             break
     if not found:
-        cart.append({"product_id": pid, "qty": qty})
+        cart.append({"product_id": pid, "qty": min(qty, product["stock"])})
     resp = JSONResponse({"ok": True, "cart_count": sum(i["qty"] for i in cart)})
-    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7)
+    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7, httponly=True,
+                    secure=IS_PRODUCTION, samesite="lax")
     return resp
 
 
 @app.post("/api/carrinho/update")
 async def api_cart_update(request: Request):
-    data = await request.json()
-    cart = get_cart(request)
-    pid = data["product_id"]
-    qty = data.get("qty", 0)
-    cart = [i for i in cart if i["product_id"] != pid]
+    try:
+        data = await request.json()
+        pid, qty = int(data["product_id"]), int(data.get("qty", 0))
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Produto ou quantidade inválidos."}, status_code=400)
+    if pid <= 0 or qty < 0 or qty > 20:
+        return JSONResponse({"ok": False, "error": "Quantidade inválida."}, status_code=400)
+    cart = [i for i in get_cart(request) if isinstance(i, dict) and i.get("product_id") != pid]
     if qty > 0:
-        cart.append({"product_id": pid, "qty": qty})
+        db = get_db()
+        product = db.execute("SELECT stock FROM products WHERE id=? AND active=1", (pid,)).fetchone()
+        db.close()
+        if not product:
+            return JSONResponse({"ok": False, "error": "Produto indisponível."}, status_code=404)
+        cart.append({"product_id": pid, "qty": min(qty, product["stock"], 20)})
     resp = JSONResponse({"ok": True})
-    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7)
+    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7, httponly=True,
+                    secure=IS_PRODUCTION, samesite="lax")
     return resp
 
 
 @app.post("/api/carrinho/remove")
 async def api_cart_remove(request: Request):
-    data = await request.json()
-    cart = [i for i in get_cart(request) if i["product_id"] != data["product_id"]]
+    try:
+        data = await request.json()
+        pid = int(data["product_id"])
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Produto inválido."}, status_code=400)
+    cart = [i for i in get_cart(request) if isinstance(i, dict) and i.get("product_id") != pid]
     resp = JSONResponse({"ok": True})
-    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7)
+    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7, httponly=True,
+                    secure=IS_PRODUCTION, samesite="lax")
     return resp
 
 
@@ -707,12 +734,25 @@ def admin_agenda(request: Request, date: Optional[str] = None):
 async def admin_agenda_status(request: Request):
     user = get_current_user(request)
     if not user or user.get("role") not in ("admin", "barber"):
-        return JSONResponse({"ok": False}, status_code=401)
-    data = await request.json()
+        return JSONResponse({"ok": False, "error": "Acesso não autorizado."}, status_code=403)
+    try:
+        data = await request.json()
+        appointment_id = int(data["appointment_id"])
+        status = str(data["status"]).strip().lower()
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Dados inválidos."}, status_code=400)
+    if status not in {"scheduled", "completed", "cancelled"}:
+        return JSONResponse({"ok": False, "error": "Status inválido."}, status_code=400)
     db = get_db()
-    db.execute("UPDATE appointments SET status=? WHERE id=?", (data["status"], data["appointment_id"]))
-    db.commit()
-    db.close()
+    try:
+        updated = db.execute("UPDATE appointments SET status=? WHERE id=?",
+                             (status, appointment_id))
+        if updated.rowcount != 1:
+            db.rollback()
+            return JSONResponse({"ok": False, "error": "Agendamento não encontrado."}, status_code=404)
+        db.commit()
+    finally:
+        db.close()
     return JSONResponse({"ok": True})
 
 
