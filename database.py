@@ -158,6 +158,21 @@ def init_db():
     if "session_version" not in user_columns:
         c.execute("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0")
 
+    # Tentativas de autenticação para limitação de força bruta, persistentes entre reinicializações.
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS auth_login_attempts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL,
+        client_ip TEXT NOT NULL,
+        attempted_at TEXT NOT NULL,
+        succeeded INTEGER NOT NULL DEFAULT 0
+    )
+    """)
+    c.execute("""
+    CREATE INDEX IF NOT EXISTS idx_auth_login_attempts_lookup
+    ON auth_login_attempts(email, client_ip, attempted_at, succeeded)
+    """)
+
     # Tokens de recuperação: apenas o hash é armazenado; o token em claro só vai por e-mail.
     c.execute("""
     CREATE TABLE IF NOT EXISTS password_reset_tokens (
