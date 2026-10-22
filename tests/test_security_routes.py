@@ -408,7 +408,7 @@ class SecurityRouteTests(unittest.TestCase):
     def test_new_customer_rejects_short_or_mismatched_password(self):
         self._login("admin@example.test")
         cases = [
-            ("short", "short", "A senha deve ter pelo menos 6 caracteres."),
+            ("short", "short", "A senha deve ter pelo menos 8 caracteres."),
             ("SenhaNova-456", "diferente", "A confirmação da senha não confere."),
         ]
         for index, (password, confirmation, message) in enumerate(cases):
@@ -501,6 +501,39 @@ class SecurityRouteTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 403)
         self.assertIn("Origem da requisição não permitida", response.text)
+
+
+    def test_successful_login_clears_prior_failed_attempts(self):
+        for _ in range(3):
+            self._login("cliente@example.test", "senha-incorreta")
+        db = self.app_module.get_db()
+        before = db.execute(
+            "SELECT COUNT(*) AS total FROM auth_login_attempts "
+            "WHERE email=? AND succeeded=0",
+            ("cliente@example.test",),
+        ).fetchone()["total"]
+        db.close()
+        self.assertEqual(before, 3)
+
+        self.assertEqual(self._login("cliente@example.test").status_code, 303)
+        db = self.app_module.get_db()
+        after = db.execute(
+            "SELECT COUNT(*) AS total FROM auth_login_attempts "
+            "WHERE email=? AND client_ip=? AND succeeded=0",
+            ("cliente@example.test", "testclient"),
+        ).fetchone()["total"]
+        db.close()
+        self.assertEqual(after, 0)
+
+    def test_password_hash_upgrade_keeps_legacy_hashes_verifiable(self):
+        from auth import hash_password, verify_password
+        legacy_hash = "pbkdf2$100000$73616c74$" + __import__("hashlib").pbkdf2_hmac(
+            "sha256", b"SenhaTeste-123", b"73616c74", 100000
+        ).hex()
+        self.assertTrue(verify_password("SenhaTeste-123", legacy_hash))
+        new_hash = hash_password("SenhaTeste-123")
+        self.assertTrue(new_hash.startswith("pbkdf2$600000$"))
+        self.assertTrue(verify_password("SenhaTeste-123", new_hash))
 
 
 if __name__ == "__main__":
