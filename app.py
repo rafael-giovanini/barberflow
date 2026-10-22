@@ -419,37 +419,59 @@ async def api_agendar(request: Request):
     user = get_current_user(request)
     if not user:
         return JSONResponse({"ok": False, "error": "Faça login para agendar"}, status_code=401)
-    data = await request.json()
-    db = get_db()
-    service = db.execute("SELECT duration_min FROM services WHERE id=?", (data["service_id"],)).fetchone()
-    if not service:
-        db.close()
-        return JSONResponse({"ok": False, "error": "Serviço inválido"})
-    start = datetime.strptime(data["start_time"], "%H:%M")
-    end = start + timedelta(minutes=service["duration_min"])
-    # Verifica conflito
-    conflict = db.execute("""
-        SELECT id FROM appointments WHERE barber_id=? AND appointment_date=? AND status='scheduled'
-        AND NOT (end_time <= ? OR start_time >= ?)
-    """, (data["barber_id"], data["date"], data["start_time"], end.strftime("%H:%M"))).fetchone()
-    if conflict:
-        db.close()
-        return JSONResponse({"ok": False, "error": "Horário já reservado, escolha outro."})
-    db.execute("""
-        INSERT INTO appointments (user_id, barber_id, service_id, appointment_date, start_time, end_time, notes)
-        VALUES (?,?,?,?,?,?,?)
-    """, (user["user_id"], data["barber_id"], data["service_id"], data["date"],
-          data["start_time"], end.strftime("%H:%M"), data.get("notes", "")))
-    db.commit()
-    db.close()
-    # Notifica o barbeiro no WhatsApp (se configurado)
     try:
-        parts = data["date"].split("-")
-        msg = (f"🔔 NOVO AGENDAMENTO!\n"
-               f"Cliente: {user['name']}\n"
-               f"Data: {parts[2]}/{parts[1]}/{parts[0]} às {data['start_time']}\n"
-               f"Serviço: ID {data['service_id']}\n"
-               f"Obs: {data.get('notes','-')}")
+        data = await request.json()
+        barber_id = int(data["barber_id"])
+        service_id = int(data["service_id"])
+        appointment_date = datetime.strptime(str(data["date"]), "%Y-%m-%d").date()
+        start = datetime.strptime(str(data["start_time"]), "%H:%M")
+        notes = str(data.get("notes", "")).strip()[:500]
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Dados de agendamento inválidos."}, status_code=400)
+    if appointment_date < datetime.now().date():
+        return JSONResponse({"ok": False, "error": "Não é possível agendar no passado."}, status_code=400)
+    db = get_db()
+    try:
+        barber = db.execute("SELECT * FROM barbers WHERE id=? AND active=1", (barber_id,)).fetchone()
+        service = db.execute("SELECT duration_min FROM services WHERE id=? AND active=1", (service_id,)).fetchone()
+        if not barber or not service:
+            return JSONResponse({"ok": False, "error": "Barbeiro ou serviço indisponível."}, status_code=400)
+        end = start + timedelta(minutes=service["duration_min"])
+        work_days = json.loads(barber["work_days"] or "[]")
+        if appointment_date.isoweekday() not in work_days:
+            return JSONResponse({"ok": False, "error": "O barbeiro não atende nesta data."}, status_code=400)
+        work_start = datetime.strptime(barber["work_start"], "%H:%M")
+        work_end = datetime.strptime(barber["work_end"], "%H:%M")
+        lunch_start = datetime.strptime(barber["lunch_start"], "%H:%M")
+        lunch_end = datetime.strptime(barber["lunch_end"], "%H:%M")
+        if (start < work_start or end > work_end or
+                (start < lunch_end and end > lunch_start) or start.minute not in (0, 30)):
+            return JSONResponse({"ok": False, "error": "Horário fora da agenda de atendimento."}, status_code=400)
+        if appointment_date == datetime.now().date() and start <= datetime.now():
+            return JSONResponse({"ok": False, "error": "Não é possível agendar um horário passado."}, status_code=400)
+        db.execute("BEGIN IMMEDIATE")
+        conflict = db.execute("""
+            SELECT id FROM appointments WHERE barber_id=? AND appointment_date=? AND status='scheduled'
+            AND NOT (end_time <= ? OR start_time >= ?)
+        """, (barber_id, appointment_date.isoformat(), start.strftime("%H:%M"), end.strftime("%H:%M"))).fetchone()
+        if conflict:
+            db.rollback()
+            return JSONResponse({"ok": False, "error": "Horário já reservado, escolha outro."}, status_code=409)
+        db.execute("""
+            INSERT INTO appointments (user_id, barber_id, service_id, appointment_date, start_time, end_time, notes)
+            VALUES (?,?,?,?,?,?,?)
+        """, (user["user_id"], barber_id, service_id, appointment_date.isoformat(),
+              start.strftime("%H:%M"), end.strftime("%H:%M"), notes))
+        db.commit()
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+        db.rollback()
+        return JSONResponse({"ok": False, "error": "Configuração de agenda inválida."}, status_code=400)
+    finally:
+        db.close()
+    try:
+        msg = (f"🔔 NOVO AGENDAMENTO!\nCliente: {user['name']}\n"
+               f"Data: {appointment_date.strftime('%d/%m/%Y')} às {start.strftime('%H:%M')}\n"
+               f"Serviço: {service_id}\nObs: {notes or '-'}")
         send_whatsapp_notify(msg)
     except Exception:
         pass
@@ -535,10 +557,18 @@ async def finalizar_pedido(request: Request, customer_name: str = Form(...),
 
 @app.get("/pedido-confirmado/{order_id}", response_class=HTMLResponse)
 def pedido_confirmado(request: Request, order_id: int):
+    user = get_current_user(request)
     db = get_db()
     order = db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+    if not order or (order["user_id"] is not None and
+                     (not user or user.get("user_id") != order["user_id"]) and
+                     (not user or user.get("role") != "admin")):
+        db.close()
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    if order["user_id"] is None and (not user or user.get("role") != "admin"):
+        db.close()
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
     items = db.execute("SELECT * FROM order_items WHERE order_id=?", (order_id,)).fetchall()
-    user = get_current_user(request)
     db.close()
     return templates.TemplateResponse("pedido_confirmado.html", {
         "request": request, "user": user, "order": order, "items": items,
@@ -831,7 +861,7 @@ def admin_pedidos(request: Request):
 @app.get("/admin/configuracoes", response_class=HTMLResponse)
 def admin_configuracoes(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
     settings = get_settings()
     return templates.TemplateResponse("admin/configuracoes.html", {
@@ -842,16 +872,29 @@ def admin_configuracoes(request: Request):
 @app.post("/admin/configuracoes/salvar")
 async def admin_configuracoes_salvar(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
     form = await request.form()
+    allowed_keys = {"shop_name", "shop_slogan", "logo_url", "color_primary",
+                    "color_primary_light", "color_bg", "color_card", "color_text",
+                    "whatsapp", "instagram", "address", "whatsapp_notify",
+                    "whatsapp_api_url"}
     db = get_db()
-    for key in form:
-        db.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
-                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                   (key, form[key]))
-    db.commit()
-    db.close()
+    try:
+        for key in allowed_keys.intersection(form.keys()):
+            value = str(form[key]).strip()[:2000]
+            if key in {"whatsapp_api_url"} and value:
+                from urllib.parse import urlsplit
+                parsed = urlsplit(value)
+                if parsed.scheme != "https" or not parsed.hostname:
+                    db.close()
+                    return RedirectResponse(url="/admin/configuracoes?erro=url", status_code=303)
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
+                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                       (key, value))
+        db.commit()
+    finally:
+        db.close()
     return RedirectResponse(url="/admin/configuracoes?salvo=1", status_code=303)
 
 
@@ -859,7 +902,7 @@ async def admin_configuracoes_salvar(request: Request):
 @app.get("/admin/barbeiros", response_class=HTMLResponse)
 def admin_barbeiros(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
     db = get_db()
     barbers = [dict(r) for r in db.execute("""
@@ -876,7 +919,7 @@ def admin_barbeiros(request: Request):
 @app.post("/admin/barbeiros/salvar")
 async def admin_barbeiro_salvar(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
     form = await request.form()
     name = form.get("name", "").strip()
@@ -923,7 +966,7 @@ async def admin_barbeiro_salvar(request: Request):
 @app.post("/admin/barbeiros/excluir")
 async def admin_barbeiro_excluir(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
     form = await request.form()
     db = get_db()
