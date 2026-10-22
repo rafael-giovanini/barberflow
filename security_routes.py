@@ -126,12 +126,23 @@ def register_security_routes(app, templates, get_db, get_current_user,
             return RedirectResponse(url="/admin/clientes?erro=dados", status_code=303)
         db = get_db()
         try:
-            db.execute("""
+            updated = db.execute("""
                 UPDATE users SET name=?, email=?, phone=?
                 WHERE id=? AND role='customer'
             """, (name, email, phone, customer_id))
+            if updated.rowcount != 1:
+                db.rollback()
+                db.close()
+                return RedirectResponse(
+                    url="/admin/clientes?erro=nao_encontrado", status_code=303
+                )
             db.commit()
+        except sqlite3.IntegrityError:
+            db.rollback()
+            db.close()
+            return RedirectResponse(url="/admin/clientes?erro=email", status_code=303)
         except Exception:
+            db.rollback()
             db.close()
             return RedirectResponse(url="/admin/clientes?erro=email", status_code=303)
         db.close()
@@ -147,10 +158,16 @@ def register_security_routes(app, templates, get_db, get_current_user,
         if not user:
             return RedirectResponse(url="/login", status_code=303)
         db = get_db()
-        db.execute("""
+        updated = db.execute("""
             UPDATE users SET active=?, session_version=session_version+1
             WHERE id=? AND role='customer'
         """, (1 if active else 0, customer_id))
+        if updated.rowcount != 1:
+            db.rollback()
+            db.close()
+            return RedirectResponse(
+                url="/admin/clientes?erro=nao_encontrado", status_code=303
+            )
         db.commit()
         db.close()
         return RedirectResponse(url="/admin/clientes", status_code=303)
