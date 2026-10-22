@@ -563,5 +563,75 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertTrue(verify_password("SenhaTeste-123", stored_hash))
 
 
+    def test_barber_cannot_change_global_settings(self):
+        self._login("barber@example.test")
+        before = self.app_module.get_settings().get("shop_name")
+        response = self.client.post("/admin/configuracoes/salvar", data={"shop_name": "Alteração indevida"})
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/login")
+        self.assertEqual(self.app_module.get_settings().get("shop_name"), before)
+
+    def test_barber_cannot_manage_barber_accounts(self):
+        self._login("barber@example.test")
+        response = self.client.post("/admin/barbeiros/salvar", data={
+            "name": "Conta Indevida", "email": "novo-barber@example.test",
+            "password": "SenhaNova-456", "work_days": ["1"],
+        })
+        self.assertEqual(response.status_code, 303)
+        db = self.app_module.get_db()
+        row = db.execute("SELECT id FROM users WHERE email=?", ("novo-barber@example.test",)).fetchone()
+        db.close()
+        self.assertIsNone(row)
+
+    def test_appointment_status_rejects_invalid_values(self):
+        self._login("admin@example.test")
+        response = self.client.post("/admin/agenda/status", json={
+            "appointment_id": 1, "status": "paid",
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_appointment_status_rejects_nonexistent_id(self):
+        self._login("admin@example.test")
+        response = self.client.post("/admin/agenda/status", json={
+            "appointment_id": 999999, "status": "completed",
+        })
+        self.assertEqual(response.status_code, 404)
+
+    def test_customer_cannot_view_another_customers_order(self):
+        db = self.app_module.get_db()
+        owner = db.execute("SELECT id FROM users WHERE email=?", ("outro@example.test",)).fetchone()
+        db.execute(
+            "INSERT INTO orders (user_id, customer_name, customer_phone, address, total, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (owner["id"], "Outro Cliente", "11999999999", "Endereço privado", 100, "pending"),
+        )
+        order_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+        self._login("cliente@example.test")
+        response = self.client.get(f"/pedido-confirmado/{order_id}")
+        self.assertEqual(response.status_code, 404)
+
+    def test_guest_order_receipt_requires_signed_receipt_cookie(self):
+        db = self.app_module.get_db()
+        db.execute(
+            "INSERT INTO orders (user_id, customer_name, customer_phone, address, total, status) VALUES (NULL, ?, ?, ?, ?, ?)",
+            ("Cliente Visitante", "11999999999", "Endereço privado", 100, "pending"),
+        )
+        order_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+        response = self.client.get(f"/pedido-confirmado/{order_id}")
+        self.assertEqual(response.status_code, 404)
+
+    def test_cross_origin_rejection_still_has_security_headers(self):
+        response = self.client.post(
+            "/login",
+            data={"email": "cliente@example.test", "password": "SenhaTeste-123"},
+            headers={"Origin": "https://attacker.example"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+
+
 if __name__ == "__main__":
     unittest.main()
