@@ -634,6 +634,11 @@ async def finalizar_pedido(request: Request, customer_name: str = Form(...),
                 return JSONResponse({"ok": False, "error": "Estoque alterado durante a compra. Tente novamente."}, status_code=409)
             db.execute("INSERT INTO order_items (order_id, product_id, product_name, quantity, price) VALUES (?,?,?,?,?)",
                        (order_id, product["id"], product["name"], qty, product["price"]))
+            db.execute("""INSERT INTO stock_movements
+                (product_id, movement_type, quantity, unit_cost_cents, note, order_id, created_by)
+                VALUES (?, 'sale', ?, 0, ?, ?, ?)""",
+                (product["id"], -qty, f"Venda no pedido #{order_id}", order_id,
+                 user["user_id"] if user else None))
         db.commit()
     except Exception:
         db.rollback()
@@ -1144,13 +1149,22 @@ def admin_produtos(request: Request):
         return RedirectResponse(url="/login", status_code=303)
     db = get_db()
     products = [dict(r) for r in db.execute("SELECT * FROM products ORDER BY category, name").fetchall()]
+    movements = db.execute("""
+        SELECT m.*, p.name AS product_name, u.name AS user_name
+        FROM stock_movements m
+        JOIN products p ON p.id=m.product_id
+        LEFT JOIN users u ON u.id=m.created_by
+        ORDER BY m.created_at DESC, m.id DESC LIMIT 100
+    """).fetchall()
     db.close()
-    return templates.TemplateResponse("admin/produtos.html", {"request": request, "user": user, "products": products})
+    return templates.TemplateResponse("admin/produtos.html", {
+        "request": request, "user": user, "products": products, "movements": movements,
+    })
 
 
 @app.post("/admin/produtos/salvar")
 def admin_produto_salvar(request: Request, name: str = Form(...), description: str = Form(""),
-                         price: float = Form(...), stock: int = Form(0),
+                         price: float = Form(...), stock: int = Form(0), cost_price: float = Form(0),
                          category: str = Form("Geral"), image_url: str = Form(""),
                          product_id: Optional[int] = Form(None)):
     user = get_current_user(request)
@@ -1163,6 +1177,7 @@ def admin_produto_salvar(request: Request, name: str = Form(...), description: s
     if (not name or len(name) > 120 or len(description) > 2000 or
             not category or len(category) > 80 or len(image_url) > 1000 or
             not math.isfinite(price) or price < 0 or price > 1_000_000 or
+            not math.isfinite(cost_price) or cost_price < 0 or cost_price > price or
             stock < 0 or stock > 1_000_000):
         return RedirectResponse(url="/admin/produtos?erro=dados", status_code=303)
     if image_url:
@@ -1170,21 +1185,32 @@ def admin_produto_salvar(request: Request, name: str = Form(...), description: s
         parsed_image = urlsplit(image_url)
         if parsed_image.scheme not in {"https", "http"} or not parsed_image.hostname:
             return RedirectResponse(url="/admin/produtos?erro=imagem", status_code=303)
+    if user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
     db = get_db()
     try:
+        db.execute("BEGIN IMMEDIATE")
         if product_id:
-            changed = db.execute(
-                "UPDATE products SET name=?, description=?, price=?, stock=?, category=?, image_url=? WHERE id=?",
-                (name, description, price, stock, category, image_url, product_id),
-            )
-            if changed.rowcount != 1:
+            current = db.execute("SELECT stock FROM products WHERE id=?", (product_id,)).fetchone()
+            if not current:
                 db.rollback()
                 return RedirectResponse(url="/admin/produtos?erro=nao_encontrado", status_code=303)
+            changed_qty = stock - int(current["stock"])
+            db.execute("UPDATE products SET name=?, description=?, price=?, cost_price=?, stock=?, category=?, image_url=? WHERE id=?",
+                (name, description, price, cost_price, stock, category, image_url, product_id))
+            if changed_qty:
+                db.execute("""INSERT INTO stock_movements
+                    (product_id, movement_type, quantity, unit_cost_cents, note, created_by)
+                    VALUES (?, 'adjustment', ?, ?, ?, ?)""",
+                    (product_id, changed_qty, int(round(cost_price * 100)), "Ajuste de saldo pelo cadastro do produto", user["user_id"]))
         else:
-            db.execute(
-                "INSERT INTO products (name, description, price, stock, category, image_url) VALUES (?,?,?,?,?,?)",
-                (name, description, price, stock, category, image_url),
-            )
+            cur = db.execute("INSERT INTO products (name, description, price, cost_price, stock, category, image_url) VALUES (?,?,?,?,?,?,?)",
+                (name, description, price, cost_price, stock, category, image_url))
+            if stock:
+                db.execute("""INSERT INTO stock_movements
+                    (product_id, movement_type, quantity, unit_cost_cents, note, created_by)
+                    VALUES (?, 'opening', ?, ?, 'Saldo inicial do cadastro', ?)""",
+                    (cur.lastrowid, stock, int(round(cost_price * 100)), user["user_id"]))
         db.commit()
     finally:
         db.close()
