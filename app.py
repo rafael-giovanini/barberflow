@@ -789,6 +789,126 @@ def admin_dashboard(request: Request):
     })
 
 
+
+@app.get("/admin/financeiro", response_class=HTMLResponse)
+def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Optional[str] = None):
+    """Relatório financeiro com acesso restrito ao administrador."""
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    inicio = inicio or today[:8] + "01"
+    fim = fim or today
+    try:
+        inicio_date = datetime.strptime(inicio, "%Y-%m-%d").date()
+        fim_date = datetime.strptime(fim, "%Y-%m-%d").date()
+        if inicio_date > fim_date or (fim_date - inicio_date).days > 366:
+            raise ValueError
+    except (TypeError, ValueError):
+        return RedirectResponse(url="/admin/financeiro?erro=periodo", status_code=303)
+
+    db = get_db()
+    try:
+        totals = db.execute("""
+            SELECT
+                COALESCE(SUM(CASE WHEN transaction_type='income' AND status='paid'
+                    THEN amount_cents ELSE 0 END), 0) AS income_cents,
+                COALESCE(SUM(CASE WHEN transaction_type='expense' AND status='paid'
+                    THEN amount_cents ELSE 0 END), 0) AS expense_cents,
+                COALESCE(SUM(CASE WHEN status='pending'
+                    THEN amount_cents ELSE 0 END), 0) AS pending_cents
+            FROM financial_transactions
+            WHERE occurred_on BETWEEN ? AND ?
+        """, (inicio, fim)).fetchone()
+        transactions = db.execute("""
+            SELECT t.*, b.name AS barber_name, u.name AS creator_name
+            FROM financial_transactions t
+            LEFT JOIN barbers b ON b.id=t.barber_id
+            LEFT JOIN users u ON u.id=t.created_by
+            WHERE t.occurred_on BETWEEN ? AND ?
+            ORDER BY t.occurred_on DESC, t.id DESC
+            LIMIT 250
+        """, (inicio, fim)).fetchall()
+        production = db.execute("""
+            SELECT b.id AS barber_id, b.name AS barber_name,
+                   COUNT(a.id) AS completed_services,
+                   COALESCE(SUM(CAST(ROUND(s.price * 100) AS INTEGER)), 0) AS production_cents,
+                   COALESCE(cs.commission_percent, 0) AS commission_percent
+            FROM barbers b
+            LEFT JOIN appointments a
+              ON a.barber_id=b.id AND a.status='completed'
+             AND a.appointment_date BETWEEN ? AND ?
+            LEFT JOIN services s ON s.id=a.service_id
+            LEFT JOIN barber_commission_settings cs ON cs.barber_id=b.id
+            WHERE b.active=1
+            GROUP BY b.id, b.name, cs.commission_percent
+            ORDER BY production_cents DESC, b.name
+        """, (inicio, fim)).fetchall()
+    finally:
+        db.close()
+
+    return templates.TemplateResponse("admin/financeiro.html", {
+        "request": request, "user": user, "inicio": inicio, "fim": fim,
+        "totals": totals, "transactions": transactions, "production": production,
+        "net_cents": totals["income_cents"] - totals["expense_cents"],
+    })
+
+
+@app.post("/admin/financeiro/lancamento")
+def admin_financeiro_lancamento(
+    request: Request,
+    transaction_type: str = Form(...),
+    category: str = Form(...),
+    description: str = Form(...),
+    amount: str = Form(...),
+    occurred_on: str = Form(...),
+    payment_method: str = Form(""),
+    status: str = Form("paid"),
+):
+    """Registra uma entrada ou despesa manual sem expor o financeiro aos barbeiros."""
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+
+    import math
+    category, description = category.strip(), description.strip()
+    payment_method = payment_method.strip()
+    try:
+        normalized_amount = amount.strip().replace(",", ".")
+        amount_value = float(normalized_amount)
+        occurred = datetime.strptime(occurred_on, "%Y-%m-%d").date()
+    except (TypeError, ValueError, OverflowError):
+        return RedirectResponse(url="/admin/financeiro?erro=dados", status_code=303)
+
+    if (transaction_type not in {"income", "expense"}
+            or status not in {"pending", "paid", "cancelled"}
+            or not category or len(category) > 80
+            or not description or len(description) > 240
+            or len(payment_method) > 40
+            or not math.isfinite(amount_value)
+            or amount_value <= 0 or amount_value > 100_000_000):
+        return RedirectResponse(url="/admin/financeiro?erro=dados", status_code=303)
+
+    amount_cents = int(round(amount_value * 100))
+    if amount_cents <= 0:
+        return RedirectResponse(url="/admin/financeiro?erro=dados", status_code=303)
+
+    db = get_db()
+    try:
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents,
+                 occurred_on, payment_method, status, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (transaction_type, category, description, amount_cents,
+              occurred.isoformat(), payment_method or None, status, user["user_id"]))
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/financeiro?salvo=1", status_code=303)
+
+
 @app.get("/admin/agenda", response_class=HTMLResponse)
 def admin_agenda(request: Request, date: Optional[str] = None):
     user = get_current_user(request)
