@@ -68,6 +68,27 @@
       </div>
     {% else %}<p class="text-muted">Sem movimentações financeiras no período para exibir o gráfico.</p>{% endif %}
 
+    <h3 style="color:var(--dourado); margin:28px 0 16px;">Desempenho dos produtos</h3>
+    <p class="text-muted">Relatório estimado com base nas vendas registradas no estoque, preço do item no pedido e custo unitário registrado no momento da venda. Não inclui taxas de cartão, impostos ou outras despesas operacionais.</p>
+    {% if product_performance %}
+    <table class="admin-table">
+      <thead><tr><th>Produto</th><th>Quantidade vendida</th><th>Vendas registradas</th><th>Custo estimado</th><th>Margem bruta estimada</th></tr></thead>
+      <tbody>
+      {% for p in product_performance %}
+        <tr>
+          <td>{{ p.product_name }}</td>
+          <td>{{ p.quantity_sold }}</td>
+          <td>R$ {{ "%.2f"|format(p.sales_cents / 100) }}</td>
+          <td>R$ {{ "%.2f"|format(p.cost_cents / 100) }}</td>
+          <td>R$ {{ "%.2f"|format((p.sales_cents - p.cost_cents) / 100) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-muted">Nenhuma venda de produto registrada no período selecionado.</p>
+    {% endif %}
+
     <h3 style="color:var(--dourado); margin:28px 0 16px;">Produção por barbeiro</h3>
     <p class="text-muted">Produção baseada no preço registrado no momento do agendamento. Comissão é estimativa e não representa pagamento de comissão.</p>
     {% if production %}
