@@ -615,7 +615,7 @@ async def finalizar_pedido(request: Request, customer_name: str = Form(...),
         verified_items = []
         total = 0.0
         for pid, qty in cart_map.items():
-            product = db.execute("SELECT id, name, price, stock FROM products WHERE id=? AND active=1", (pid,)).fetchone()
+            product = db.execute("SELECT id, name, price, stock, cost_price FROM products WHERE id=? AND active=1", (pid,)).fetchone()
             if not product or product["stock"] < qty:
                 db.rollback()
                 return JSONResponse({"ok": False, "error": "Um produto está indisponível ou sem estoque suficiente."}, status_code=409)
@@ -636,8 +636,8 @@ async def finalizar_pedido(request: Request, customer_name: str = Form(...),
                        (order_id, product["id"], product["name"], qty, product["price"]))
             db.execute("""INSERT INTO stock_movements
                 (product_id, movement_type, quantity, unit_cost_cents, note, order_id, created_by)
-                VALUES (?, 'sale', ?, 0, ?, ?, ?)""",
-                (product["id"], -qty, f"Venda no pedido #{order_id}", order_id,
+                VALUES (?, 'sale', ?, ?, ?, ?, ?)""",
+                (product["id"], -qty, int(round(float(product["cost_price"] or 0) * 100)), f"Venda no pedido #{order_id}", order_id,
                  user["user_id"] if user else None))
         db.commit()
     except Exception:
