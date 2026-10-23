@@ -151,6 +151,20 @@ def init_db():
     )
     """)
 
+
+    # Snapshot de preço para preservar histórico mesmo se o serviço mudar de preço.
+    appointment_columns = {row["name"] for row in c.execute("PRAGMA table_info(appointments)").fetchall()}
+    if "service_price_cents" not in appointment_columns:
+        c.execute("ALTER TABLE appointments ADD COLUMN service_price_cents INTEGER")
+        c.execute("""
+            UPDATE appointments
+            SET service_price_cents = (
+                SELECT CAST(ROUND(price * 100) AS INTEGER)
+                FROM services WHERE services.id = appointments.service_id
+            )
+            WHERE service_price_cents IS NULL
+        """)
+
     # Migração compatível: acrescenta campos sem remover ou recriar registros.
     user_columns = {row["name"] for row in c.execute("PRAGMA table_info(users)").fetchall()}
     if "active" not in user_columns:
@@ -207,16 +221,24 @@ def init_db():
             CHECK (status IN ('pending', 'paid', 'cancelled')),
         barber_id INTEGER,
         order_id INTEGER,
+        appointment_id INTEGER,
         created_by INTEGER,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (barber_id) REFERENCES barbers(id),
         FOREIGN KEY (order_id) REFERENCES orders(id),
+        FOREIGN KEY (appointment_id) REFERENCES appointments(id),
         FOREIGN KEY (created_by) REFERENCES users(id)
     )
     """)
     c.execute("""
     CREATE INDEX IF NOT EXISTS idx_financial_transactions_date_status
     ON financial_transactions(occurred_on, status, transaction_type)
+    """)
+
+    c.execute("""
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_transactions_appointment_unique
+    ON financial_transactions(appointment_id)
+    WHERE appointment_id IS NOT NULL
     """)
     c.execute("""
     CREATE TABLE IF NOT EXISTS barber_commission_settings (
