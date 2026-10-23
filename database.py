@@ -191,6 +191,43 @@ def init_db():
     ON password_reset_tokens(email, created_at)
     """)
 
+
+    # Financeiro: lançamentos manuais e configuração de comissão por barbeiro.
+    # Valores monetários são armazenados em centavos para evitar erros de ponto flutuante.
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS financial_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        transaction_type TEXT NOT NULL CHECK (transaction_type IN ('income', 'expense')),
+        category TEXT NOT NULL,
+        description TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+        occurred_on TEXT NOT NULL,
+        payment_method TEXT,
+        status TEXT NOT NULL DEFAULT 'paid'
+            CHECK (status IN ('pending', 'paid', 'cancelled')),
+        barber_id INTEGER,
+        order_id INTEGER,
+        created_by INTEGER,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (barber_id) REFERENCES barbers(id),
+        FOREIGN KEY (order_id) REFERENCES orders(id),
+        FOREIGN KEY (created_by) REFERENCES users(id)
+    )
+    """)
+    c.execute("""
+    CREATE INDEX IF NOT EXISTS idx_financial_transactions_date_status
+    ON financial_transactions(occurred_on, status, transaction_type)
+    """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS barber_commission_settings (
+        barber_id INTEGER PRIMARY KEY,
+        commission_percent REAL NOT NULL DEFAULT 0
+            CHECK (commission_percent >= 0 AND commission_percent <= 100),
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (barber_id) REFERENCES barbers(id)
+    )
+    """)
+
     conn.commit()
 
     # Sempre garante configurações padrão
