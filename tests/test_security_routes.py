@@ -730,5 +730,54 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(own_status, "completed")
 
 
+    def test_cart_update_rejects_product_without_stock(self):
+        db = self.app_module.get_db()
+        db.execute(
+            "INSERT INTO products (name, price, stock, active) VALUES (?, ?, ?, 1)",
+            ("Produto sem estoque", 10.0, 0),
+        )
+        product_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+
+        response = self.client.post(
+            "/api/carrinho/update",
+            json={"product_id": product_id, "qty": 1},
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(response.json()["ok"])
+        self.assertIn("sem estoque", response.json()["error"])
+
+    def test_product_rejects_negative_stock(self):
+        self._login("admin@example.test")
+        response = self.client.post("/admin/produtos/salvar", data={
+            "name": "Produto estoque inválido", "price": "10",
+            "stock": "-1", "category": "Teste", "description": "",
+            "image_url": "",
+        })
+        self.assertEqual(response.status_code, 303)
+        db = self.app_module.get_db()
+        row = db.execute(
+            "SELECT id FROM products WHERE name=?", ("Produto estoque inválido",)
+        ).fetchone()
+        db.close()
+        self.assertIsNone(row)
+
+    def test_product_rejects_non_http_image_url(self):
+        self._login("admin@example.test")
+        response = self.client.post("/admin/produtos/salvar", data={
+            "name": "Produto URL inválida", "price": "10",
+            "stock": "2", "category": "Teste", "description": "",
+            "image_url": "javascript:alert(1)",
+        })
+        self.assertEqual(response.status_code, 303)
+        db = self.app_module.get_db()
+        row = db.execute(
+            "SELECT id FROM products WHERE name=?", ("Produto URL inválida",)
+        ).fetchone()
+        db.close()
+        self.assertIsNone(row)
+
+
 if __name__ == "__main__":
     unittest.main()
