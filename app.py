@@ -882,14 +882,26 @@ def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Option
             WHERE transaction_type='income' AND status='paid' AND order_id IS NOT NULL
               AND occurred_on BETWEEN ? AND ?
         """, (inicio, fim)).fetchone()
+        # Relatório de rentabilidade considera apenas pedidos pagos. Os itens são
+        # agregados antes do JOIN para evitar duplicação de valores em pedidos com
+        # mais de uma linha do mesmo produto.
         product_performance = db.execute("""
             SELECT p.id AS product_id, p.name AS product_name,
                    SUM(ABS(m.quantity)) AS quantity_sold,
-                   COALESCE(SUM(ABS(m.quantity) * CAST(ROUND(oi.price * 100) AS INTEGER)), 0) AS sales_cents,
+                   COALESCE(SUM(ABS(m.quantity) * COALESCE(oi.unit_price_cents, 0)), 0) AS sales_cents,
                    COALESCE(SUM(ABS(m.quantity) * m.unit_cost_cents), 0) AS cost_cents
             FROM stock_movements m
             JOIN products p ON p.id=m.product_id
-            LEFT JOIN order_items oi ON oi.order_id=m.order_id AND oi.product_id=m.product_id
+            JOIN orders o ON o.id=m.order_id AND o.status='paid'
+            LEFT JOIN (
+                SELECT order_id, product_id,
+                       CAST(ROUND(SUM(quantity * price) * 100) AS INTEGER) AS line_total_cents,
+                       CASE WHEN SUM(quantity) > 0
+                            THEN CAST(ROUND(SUM(quantity * price) * 100 / SUM(quantity)) AS INTEGER)
+                            ELSE 0 END AS unit_price_cents
+                FROM order_items
+                GROUP BY order_id, product_id
+            ) oi ON oi.order_id=m.order_id AND oi.product_id=m.product_id
             WHERE m.movement_type='sale'
               AND substr(m.created_at, 1, 10) BETWEEN ? AND ?
             GROUP BY p.id, p.name
