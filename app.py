@@ -830,6 +830,17 @@ def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Option
             ORDER BY t.occurred_on DESC, t.id DESC
             LIMIT 250
         """, (inicio, fim)).fetchall()
+        monthly = db.execute("""
+            SELECT substr(occurred_on, 1, 7) AS month,
+                   COALESCE(SUM(CASE WHEN transaction_type='income' AND status='paid'
+                       THEN amount_cents ELSE 0 END), 0) AS income_cents,
+                   COALESCE(SUM(CASE WHEN transaction_type='expense' AND status='paid'
+                       THEN amount_cents ELSE 0 END), 0) AS expense_cents
+            FROM financial_transactions
+            WHERE occurred_on BETWEEN ? AND ?
+            GROUP BY substr(occurred_on, 1, 7)
+            ORDER BY month
+        """, (inicio, fim)).fetchall()
         production = db.execute("""
             SELECT b.id AS barber_id, b.name AS barber_name,
                    COUNT(a.id) AS completed_services,
@@ -850,7 +861,7 @@ def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Option
 
     return templates.TemplateResponse("admin/financeiro.html", {
         "request": request, "user": user, "inicio": inicio, "fim": fim,
-        "totals": totals, "transactions": transactions, "production": production,
+        "totals": totals, "transactions": transactions, "production": production, "monthly": monthly,
         "net_cents": totals["income_cents"] - totals["expense_cents"],
     })
 
