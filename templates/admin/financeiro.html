@@ -24,6 +24,7 @@
       <label>De <input type="date" name="inicio" value="{{ inicio }}" required></label>
       <label>Até <input type="date" name="fim" value="{{ fim }}" required></label>
       <button class="btn btn-outline btn-sm" type="submit">Filtrar</button>
+      <a class="btn btn-dourado btn-sm" href="/admin/financeiro/exportar.csv?inicio={{ inicio }}&fim={{ fim }}">Exportar CSV</a>
     </form>
 
     <div class="stat-grid">
