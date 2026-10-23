@@ -10,6 +10,7 @@
     <a href="/admin/portfolio">📸 Portfólio</a>
     <a href="/admin/barbeiros">👤 Barbeiros</a>
     <a href="/admin/pedidos">📦 Pedidos</a>
+    {% if user.role == "admin" %}<a href="/admin/financeiro">💰 Financeiro</a>{% endif %}
     <a href="/app" target="_blank">📱 App Mobile</a>
     <a href="/admin/configuracoes">⚙️ Configurações</a>
     <a href="/">🌐 Ver Site</a>
@@ -27,7 +28,7 @@
       </div>
       <div class="stat-card">
         <div class="stat-value">R$ {{ "%.2f"|format(total_valor) }}</div>
-        <div class="stat-label">Faturamento Hoje</div>
+        <div class="stat-label">Valor previsto dos agendamentos</div>
       </div>
       <div class="stat-card">
         <div class="stat-value">{{ pending_orders }}</div>
