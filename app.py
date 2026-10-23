@@ -820,11 +820,25 @@ async def admin_agenda_status(request: Request):
         return JSONResponse({"ok": False, "error": "Status inválido."}, status_code=400)
     db = get_db()
     try:
-        updated = db.execute("UPDATE appointments SET status=? WHERE id=?",
-                             (status, appointment_id))
+        # Barbeiros só podem alterar agendamentos vinculados à própria agenda.
+        if user.get("role") == "barber":
+            updated = db.execute("""
+                UPDATE appointments SET status=?
+                WHERE id=? AND barber_id IN (
+                    SELECT id FROM barbers WHERE user_id=?
+                )
+            """, (status, appointment_id, user["user_id"]))
+        else:
+            updated = db.execute(
+                "UPDATE appointments SET status=? WHERE id=?",
+                (status, appointment_id),
+            )
         if updated.rowcount != 1:
             db.rollback()
-            return JSONResponse({"ok": False, "error": "Agendamento não encontrado."}, status_code=404)
+            return JSONResponse(
+                {"ok": False, "error": "Agendamento não encontrado ou sem permissão."},
+                status_code=404,
+            )
         db.commit()
     finally:
         db.close()
