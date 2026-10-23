@@ -49,6 +49,21 @@
       <div style="align-self:end"><button class="btn btn-dourado" type="submit">Salvar lançamento</button></div>
     </form>
 
+    <h3 style="color:var(--dourado); margin:28px 0 16px;">Evolução mensal</h3>
+    {% set max_month_value = ([1] + (monthly | map(attribute='income_cents') | list) + (monthly | map(attribute='expense_cents') | list)) | max %}
+    {% if monthly %}
+      <div class="form-card" style="display:grid;gap:16px;">
+      {% for m in monthly %}
+        <div>
+          <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;"><strong>{{ m.month }}</strong><span>Entradas R$ {{ "%.2f"|format(m.income_cents / 100) }} · Despesas R$ {{ "%.2f"|format(m.expense_cents / 100) }}</span></div>
+          <div style="height:12px;background:var(--cinza-claro, #e5e7eb);border-radius:6px;overflow:hidden;margin-top:6px;"><div title="Entradas" style="height:100%;width:{{ (m.income_cents / max_month_value * 100) }}%;background:var(--dourado, #b8860b);"></div></div>
+          <div style="height:6px;background:var(--cinza-claro, #e5e7eb);border-radius:6px;overflow:hidden;margin-top:4px;"><div title="Despesas" style="height:100%;width:{{ (m.expense_cents / max_month_value * 100) }}%;background:#64748b;"></div></div>
+        </div>
+      {% endfor %}
+      <small class="text-muted">Barra superior: entradas recebidas. Barra inferior: despesas pagas. Os gráficos respeitam o período filtrado.</small>
+      </div>
+    {% else %}<p class="text-muted">Sem movimentações financeiras no período para exibir o gráfico.</p>{% endif %}
+
     <h3 style="color:var(--dourado); margin:28px 0 16px;">Produção por barbeiro</h3>
     <p class="text-muted">Produção calculada com o preço atual do serviço e agendamentos concluídos. Configure as taxas de comissão antes de usar os valores como folha de pagamento; o sistema ainda não guarda o preço histórico do serviço no agendamento.</p>
     {% if production %}
