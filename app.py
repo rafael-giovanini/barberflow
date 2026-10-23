@@ -957,6 +957,29 @@ def admin_financeiro_lancamento(
     return RedirectResponse(url="/admin/financeiro?salvo=1", status_code=303)
 
 
+@app.post("/admin/financeiro/confirmar")
+def admin_financeiro_confirmar(request: Request, transaction_id: int = Form(...), status: str = Form(...)):
+    """Confirma pagamento/recebimento; somente administrador."""
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+    if status not in {"paid", "pending", "cancelled"}:
+        return RedirectResponse(url="/admin/financeiro?erro=status", status_code=303)
+    db = get_db()
+    try:
+        result = db.execute(
+            "UPDATE financial_transactions SET status=? WHERE id=? AND status != 'cancelled'",
+            (status, transaction_id),
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            return RedirectResponse(url="/admin/financeiro?erro=lancamento", status_code=303)
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/financeiro?salvo=status", status_code=303)
+
+
 @app.get("/admin/agenda", response_class=HTMLResponse)
 def admin_agenda(request: Request, date: Optional[str] = None):
     user = get_current_user(request)
@@ -1035,9 +1058,9 @@ async def admin_agenda_status(request: Request):
                         (transaction_type, category, description, amount_cents,
                          occurred_on, status, barber_id, appointment_id, created_by)
                     VALUES ('income', 'Serviços', ?, ?, date('now', 'localtime'),
-                            'paid', ?, ?, ?)
+                            'pending', ?, ?, ?)
                     ON CONFLICT(appointment_id) WHERE appointment_id IS NOT NULL
-                    DO UPDATE SET status='paid', amount_cents=excluded.amount_cents,
+                    DO UPDATE SET status='pending', amount_cents=excluded.amount_cents,
                                   barber_id=excluded.barber_id
                 """, (
                     f"Atendimento concluído #{appointment_id}", price_cents,
