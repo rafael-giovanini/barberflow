@@ -1177,7 +1177,7 @@ def admin_produto_salvar(request: Request, name: str = Form(...), description: s
     if (not name or len(name) > 120 or len(description) > 2000 or
             not category or len(category) > 80 or len(image_url) > 1000 or
             not math.isfinite(price) or price < 0 or price > 1_000_000 or
-            not math.isfinite(cost_price) or cost_price < 0 or cost_price > price or
+            not math.isfinite(cost_price) or cost_price < 0 or
             stock < 0 or stock > 1_000_000):
         return RedirectResponse(url="/admin/produtos?erro=dados", status_code=303)
     if image_url:
@@ -1215,6 +1215,43 @@ def admin_produto_salvar(request: Request, name: str = Form(...), description: s
     finally:
         db.close()
     return RedirectResponse(url="/admin/produtos?salvo=1", status_code=303)
+
+
+
+
+@app.post("/admin/estoque/entrada")
+def admin_estoque_entrada(request: Request, product_id: int = Form(...),
+                          quantity: int = Form(...), unit_cost: float = Form(...),
+                          note: str = Form("")):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+    import math
+    note = note.strip()
+    if quantity < 1 or quantity > 1_000_000 or not math.isfinite(unit_cost) or unit_cost < 0 or unit_cost > 1_000_000 or len(note) > 500:
+        return RedirectResponse(url="/admin/produtos?erro=entrada", status_code=303)
+    unit_cost_cents = int(round(unit_cost * 100))
+    db = get_db()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        product = db.execute("SELECT id, stock, cost_price FROM products WHERE id=? AND active=1", (product_id,)).fetchone()
+        if not product:
+            db.rollback()
+            return RedirectResponse(url="/admin/produtos?erro=nao_encontrado", status_code=303)
+        old_stock = int(product["stock"])
+        new_stock = old_stock + quantity
+        old_cost_cents = int(round(float(product["cost_price"] or 0) * 100))
+        weighted_cost_cents = int(round((old_stock * old_cost_cents + quantity * unit_cost_cents) / new_stock))
+        db.execute("UPDATE products SET stock=?, cost_price=? WHERE id=?",
+                   (new_stock, weighted_cost_cents / 100, product_id))
+        db.execute("""INSERT INTO stock_movements
+            (product_id, movement_type, quantity, unit_cost_cents, note, created_by)
+            VALUES (?, 'purchase', ?, ?, ?, ?)""",
+            (product_id, quantity, unit_cost_cents, note or "Entrada de compra", user["user_id"]))
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/produtos?entrada=1", status_code=303)
 
 
 @app.post("/admin/produtos/excluir")
