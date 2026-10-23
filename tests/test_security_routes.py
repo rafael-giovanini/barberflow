@@ -1047,5 +1047,44 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertIsNone(movement)
 
 
+    def test_finance_report_shows_product_sales_margin(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO products (name, price, cost_price, stock, category, active)
+            VALUES ('Pomada margem teste', 20.00, 6.00, 4, 'Modelagem', 1)
+        """)
+        product_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO orders (customer_name, customer_phone, address, total, status, payment_method)
+            VALUES ('Cliente Relatório', '', '', 20.00, 'paid', 'pix')
+        """)
+        order_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO order_items (order_id, product_id, product_name, quantity, price)
+            VALUES (?, ?, 'Pomada margem teste', 1, 20.00)
+        """, (order_id, product_id))
+        db.execute("""
+            INSERT INTO stock_movements
+                (product_id, movement_type, quantity, unit_cost_cents, note, order_id)
+            VALUES (?, 'sale', -1, 600, 'Venda teste', ?)
+        """, (product_id, order_id))
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on, status, order_id)
+            VALUES ('income', 'loja', 'Pedido teste', 2000, date('now'), 'paid', ?)
+        """, (order_id,))
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        response = self.client.get("/admin/financeiro")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Desempenho dos produtos", response.text)
+        self.assertIn("Pomada margem teste", response.text)
+        self.assertIn("R$ 20.00", response.text)
+        self.assertIn("R$ 6.00", response.text)
+        self.assertIn("R$ 14.00", response.text)
+
+
 if __name__ == "__main__":
     unittest.main()
