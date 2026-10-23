@@ -943,5 +943,54 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(row["status"], "cancelled")
 
 
+    def test_paid_store_order_creates_one_financial_income(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO orders (user_id, customer_name, customer_phone, address, total, status, payment_method)
+            VALUES ((SELECT id FROM users WHERE email='cliente@example.test'),
+                    'Cliente Teste', '', '', 79.90, 'pending', 'pix')
+        """)
+        order_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        first = self.client.post("/admin/pedidos/status", data={"order_id": order_id, "status": "paid"})
+        second = self.client.post("/admin/pedidos/status", data={"order_id": order_id, "status": "paid"})
+        self.assertEqual(first.status_code, 303)
+        self.assertEqual(second.status_code, 303)
+
+        db = self.app_module.get_db()
+        rows = db.execute(
+            "SELECT amount_cents, status, order_id FROM financial_transactions WHERE order_id=?",
+            (order_id,),
+        ).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["amount_cents"], 7990)
+        self.assertEqual(rows[0]["status"], "paid")
+        db.close()
+
+    def test_barber_cannot_change_order_payment_status(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO orders (customer_name, customer_phone, address, total, status, payment_method)
+            VALUES ('Cliente Teste', '', '', 50.00, 'pending', 'dinheiro')
+        """)
+        order_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+
+        self._login("barber@example.test")
+        response = self.client.post("/admin/pedidos/status", data={"order_id": order_id, "status": "paid"})
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/login")
+        db = self.app_module.get_db()
+        order = db.execute("SELECT status FROM orders WHERE id=?", (order_id,)).fetchone()
+        finance = db.execute("SELECT id FROM financial_transactions WHERE order_id=?", (order_id,)).fetchone()
+        db.close()
+        self.assertEqual(order["status"], "pending")
+        self.assertIsNone(finance)
+
+
 if __name__ == "__main__":
     unittest.main()
