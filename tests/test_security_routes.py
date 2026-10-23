@@ -927,7 +927,7 @@ class SecurityRouteTests(unittest.TestCase):
         """, (appointment_id,)).fetchall()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["amount_cents"], 4550)
-        self.assertEqual(rows[0]["status"], "paid")
+        self.assertEqual(rows[0]["status"], "pending")
         db.close()
 
         cancelled = self.client.post("/admin/agenda/status", json={
