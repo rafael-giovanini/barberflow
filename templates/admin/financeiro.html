@@ -18,7 +18,7 @@
 
   <div class="admin-content">
     <h1>Financeiro</h1>
-    <p class="text-muted mb-4">Entradas e despesas lançadas manualmente no período selecionado. A produção concluída dos barbeiros aparece separadamente e não significa, por si só, valor recebido.</p>
+    <p class="text-muted mb-4">Registre movimentações e confirme o recebimento ou pagamento. Atendimentos concluídos entram como pendentes até o administrador confirmar o recebimento.</p>
 
     <form method="GET" class="flex mb-4" style="gap:12px; flex-wrap:wrap;">
       <label>De <input type="date" name="inicio" value="{{ inicio }}" required></label>
@@ -65,7 +65,7 @@
     {% else %}<p class="text-muted">Sem movimentações financeiras no período para exibir o gráfico.</p>{% endif %}
 
     <h3 style="color:var(--dourado); margin:28px 0 16px;">Produção por barbeiro</h3>
-    <p class="text-muted">Produção calculada com o preço atual do serviço e agendamentos concluídos. Configure as taxas de comissão antes de usar os valores como folha de pagamento; o sistema ainda não guarda o preço histórico do serviço no agendamento.</p>
+    <p class="text-muted">Produção baseada no preço registrado no momento do agendamento. Comissão é estimativa e não representa pagamento de comissão.</p>
     {% if production %}
     <table class="admin-table">
       <thead><tr><th>Barbeiro</th><th>Serviços concluídos</th><th>Produção estimada</th><th>Comissão cadastrada</th><th>Comissão estimada</th></tr></thead>
@@ -94,7 +94,19 @@
           <td>{{ "Entrada" if t.transaction_type == "income" else "Despesa" }}</td>
           <td>{{ t.category }}<br><small class="text-muted">{{ t.description }}</small></td>
           <td>{{ t.payment_method or "—" }}</td>
-          <td>{{ {"paid":"Pago/recebido","pending":"Pendente","cancelled":"Cancelado"}.get(t.status, t.status) }}</td>
+          <td>{{ {"paid":"Pago/recebido","pending":"Pendente","cancelled":"Cancelado"}.get(t.status, t.status) }}
+            {% if t.status != "cancelled" %}
+            <form method="POST" action="/admin/financeiro/confirmar" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;">
+              <input type="hidden" name="transaction_id" value="{{ t.id }}">
+              <select name="status" aria-label="Atualizar status do lançamento">
+                <option value="paid">Confirmar pago/recebido</option>
+                <option value="pending">Manter pendente</option>
+                <option value="cancelled">Cancelar</option>
+              </select>
+              <button class="btn btn-outline btn-sm" type="submit">Atualizar</button>
+            </form>
+            {% endif %}
+          </td>
           <td>R$ {{ "%.2f"|format(t.amount_cents / 100) }}</td>
         </tr>
       {% endfor %}
