@@ -1260,6 +1260,45 @@ def admin_pedidos(request: Request):
     return templates.TemplateResponse("admin/pedidos.html", {"request": request, "user": user, "orders": orders})
 
 
+@app.post("/admin/pedidos/status")
+def admin_pedidos_status(request: Request, order_id: int = Form(...), status: str = Form(...)):
+    """Atualiza o status do pedido e sincroniza a receita da loja com o financeiro."""
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+    if status not in {"pending", "paid", "cancelled"}:
+        return RedirectResponse(url="/admin/pedidos?erro=status", status_code=303)
+    db = get_db()
+    try:
+        order = db.execute("SELECT id, total, payment_method, status FROM orders WHERE id=?", (order_id,)).fetchone()
+        if not order:
+            return RedirectResponse(url="/admin/pedidos?erro=pedido", status_code=303)
+        db.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
+        if status == "paid":
+            amount_cents = int(round(float(order["total"]) * 100))
+            if amount_cents <= 0:
+                db.rollback()
+                return RedirectResponse(url="/admin/pedidos?erro=valor", status_code=303)
+            db.execute("""
+                INSERT INTO financial_transactions
+                    (transaction_type, category, description, amount_cents, occurred_on,
+                     payment_method, status, order_id, created_by)
+                VALUES ('income', 'Loja', ?, ?, date('now', 'localtime'), ?, 'paid', ?, ?)
+                ON CONFLICT(order_id) WHERE order_id IS NOT NULL
+                DO UPDATE SET amount_cents=excluded.amount_cents,
+                              payment_method=excluded.payment_method, status='paid'
+            """, (f"Pedido da loja #{order_id}", amount_cents, order["payment_method"], order_id, user["user_id"]))
+        else:
+            db.execute("""
+                UPDATE financial_transactions SET status='cancelled'
+                WHERE order_id=? AND transaction_type='income'
+            """, (order_id,))
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/pedidos?salvo=status", status_code=303)
+
+
 @app.get("/admin/configuracoes", response_class=HTMLResponse)
 def admin_configuracoes(request: Request):
     user = get_current_user(request)
