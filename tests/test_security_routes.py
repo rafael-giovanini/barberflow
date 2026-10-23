@@ -659,6 +659,18 @@ class SecurityRouteTests(unittest.TestCase):
         db.close()
         self.assertEqual(count, 0)
 
+    def test_service_rejects_negative_price(self):
+        self._login("admin@example.test")
+        response = self.client.post("/admin/servicos/salvar", data={
+            "name": "Servico invalido", "price": "-10", "duration_min": "30",
+            "category": "Cabelo", "description": "",
+        })
+        self.assertEqual(response.status_code, 303)
+        db = self.app_module.get_db()
+        row = db.execute("SELECT id FROM services WHERE name=?", ("Servico invalido",)).fetchone()
+        db.close()
+        self.assertIsNone(row)
+
     def test_barber_cannot_change_another_barbers_appointment(self):
         db = self.app_module.get_db()
         barber_user = db.execute(
