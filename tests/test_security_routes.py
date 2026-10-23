@@ -1086,5 +1086,40 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertIn("R$ 14.00", response.text)
 
 
+    def test_finance_csv_export_requires_admin(self):
+        response = self.client.get("/admin/financeiro/exportar.csv")
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/login")
+
+        self._login("barber@example.test")
+        response = self.client.get("/admin/financeiro/exportar.csv")
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/login")
+
+    def test_admin_can_export_finance_csv_for_selected_period(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on,
+                 payment_method, status, created_by)
+            VALUES ('income', 'serviço', 'Recebimento teste', 1250, date('now'),
+                    'pix', 'paid', (SELECT id FROM users WHERE email='admin@example.test'))
+        """)
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        today = datetime.now().strftime("%Y-%m-%d")
+        response = self.client.get(
+            f"/admin/financeiro/exportar.csv?inicio={today}&fim={today}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/csv", response.headers["content-type"])
+        self.assertIn("attachment;", response.headers["content-disposition"])
+        self.assertIn("Recebimento teste", response.text)
+        self.assertIn("12.50", response.text)
+        self.assertTrue(response.content.startswith(b"\\xef\\xbb\\xbf"))
+
+
 if __name__ == "__main__":
     unittest.main()
