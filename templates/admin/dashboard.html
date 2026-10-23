@@ -44,6 +44,55 @@
       </div>
     </div>
 
+    {% if user.role == "admin" and management %}
+    <section class="form-card" style="margin:24px 0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div>
+          <h2 style="margin:0;color:var(--dourado);">Visão gerencial</h2>
+          <p class="text-muted" style="margin:6px 0 0;">Indicadores financeiros do mês selecionado e situação atual do estoque.</p>
+        </div>
+        <form method="GET" action="/admin" style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+          <label>Mês de referência
+            <input type="month" name="mes" value="{{ selected_month }}" required>
+          </label>
+          <button class="btn btn-dourado btn-sm" type="submit">Atualizar painel</button>
+        </form>
+      </div>
+      <div class="stat-grid" style="margin-top:18px;">
+        <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(management.income_cents / 100) }}</div><div class="stat-label">Recebimentos confirmados no mês</div></div>
+        <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(management.expense_cents / 100) }}</div><div class="stat-label">Despesas pagas no mês</div></div>
+        <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(management.net_cents / 100) }}</div><div class="stat-label">Saldo financeiro do mês</div></div>
+        <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(management.pending_cents / 100) }}</div><div class="stat-label">Lançamentos pendentes</div></div>
+        <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(management.stock_value_cents / 100) }}</div><div class="stat-label">Valor estimado do estoque atual</div></div>
+        <div class="stat-card"><div class="stat-value">{{ management.low_stock_count }}</div><div class="stat-label">Produtos com estoque baixo (até 3 unidades)</div></div>
+      </div>
+      {% set chart_max = [management.income_cents, management.expense_cents, 1]|max %}
+      <h3 style="margin:24px 0 12px;">Comparativo financeiro do mês</h3>
+      <div style="display:grid;gap:14px;">
+        <div>
+          <div style="display:flex;justify-content:space-between;gap:10px;"><span>Recebimentos</span><strong>R$ {{ "%.2f"|format(management.income_cents / 100) }}</strong></div>
+          <div role="img" aria-label="Barra proporcional dos recebimentos do mês" style="height:14px;background:var(--cinza-claro,#e5e7eb);border-radius:7px;overflow:hidden;"><div style="height:100%;width:{{ (management.income_cents / chart_max * 100) }}%;background:var(--dourado,#b8860b);"></div></div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;gap:10px;"><span>Despesas pagas</span><strong>R$ {{ "%.2f"|format(management.expense_cents / 100) }}</strong></div>
+          <div role="img" aria-label="Barra proporcional das despesas pagas do mês" style="height:14px;background:var(--cinza-claro,#e5e7eb);border-radius:7px;overflow:hidden;"><div style="height:100%;width:{{ (management.expense_cents / chart_max * 100) }}%;background:#64748b;"></div></div>
+        </div>
+      </div>
+      <h3 style="margin:24px 0 12px;">Produção por barbeiro</h3>
+      {% if management.barbers %}
+      <div style="overflow-x:auto;">
+        <table class="admin-table">
+          <thead><tr><th>Barbeiro</th><th>Serviços concluídos</th><th>Produção estimada</th></tr></thead>
+          <tbody>{% for barber in management.barbers %}
+            <tr><td>{{ barber.barber_name }}</td><td>{{ barber.completed_services }}</td><td>R$ {{ "%.2f"|format(barber.production_cents / 100) }}</td></tr>
+          {% endfor %}</tbody>
+        </table>
+      </div>
+      {% else %}<p class="text-muted">Ainda não há serviços concluídos neste mês.</p>{% endif %}
+      <p class="text-muted" style="margin-top:12px;font-size:.9rem;">O saldo considera apenas lançamentos pagos/recebidos registrados no financeiro. O valor do estoque usa o custo médio cadastrado e o alerta de estoque baixo considera até 3 unidades por produto. A produção por barbeiro é estimativa operacional, não equivale necessariamente ao valor recebido.</p>
+    </section>
+    {% endif %}
+
     <h3 style="color:var(--dourado); margin-bottom:16px; text-transform:uppercase; letter-spacing:1px; font-size:1.1rem;">Agendamentos de Hoje</h3>
     {% if not today_appts %}
     <p class="text-muted">Nenhum agendamento para hoje. Aproveite para organizar a loja!</p>
