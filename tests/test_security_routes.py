@@ -1118,7 +1118,7 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertIn("attachment;", response.headers["content-disposition"])
         self.assertIn("Recebimento teste", response.text)
         self.assertIn("12.50", response.text)
-        self.assertTrue(response.content.startswith(b"\\xef\\xbb\\xbf"))
+        self.assertTrue(response.content.startswith(bytes([0xEF, 0xBB, 0xBF])))
 
 
 if __name__ == "__main__":
