@@ -863,16 +863,33 @@ def admin_servico_salvar(request: Request, name: str = Form(...), description: s
     user = get_current_user(request)
     if not user or user.get("role") not in ("admin", "barber"):
         return RedirectResponse(url="/login", status_code=303)
+    name, description, category = name.strip(), description.strip(), category.strip()
+    # Nunca confiar nos valores numéricos enviados pelo formulário.
+    import math
+    if (not name or len(name) > 120 or len(description) > 2000 or
+            not category or len(category) > 80 or
+            not math.isfinite(price) or price < 0 or price > 1_000_000 or
+            duration_min < 5 or duration_min > 480):
+        return RedirectResponse(url="/admin/servicos?erro=dados", status_code=303)
     db = get_db()
-    if service_id:
-        db.execute("UPDATE services SET name=?, description=?, price=?, duration_min=?, category=? WHERE id=?",
-                   (name, description, price, duration_min, category, service_id))
-    else:
-        db.execute("INSERT INTO services (name, description, price, duration_min, category) VALUES (?,?,?,?,?)",
-                   (name, description, price, duration_min, category))
-    db.commit()
-    db.close()
-    return RedirectResponse(url="/admin/servicos", status_code=303)
+    try:
+        if service_id:
+            changed = db.execute(
+                "UPDATE services SET name=?, description=?, price=?, duration_min=?, category=? WHERE id=?",
+                (name, description, price, duration_min, category, service_id),
+            )
+            if changed.rowcount != 1:
+                db.rollback()
+                return RedirectResponse(url="/admin/servicos?erro=nao_encontrado", status_code=303)
+        else:
+            db.execute(
+                "INSERT INTO services (name, description, price, duration_min, category) VALUES (?,?,?,?,?)",
+                (name, description, price, duration_min, category),
+            )
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/servicos?salvo=1", status_code=303)
 
 
 @app.post("/admin/servicos/excluir")
@@ -906,16 +923,39 @@ def admin_produto_salvar(request: Request, name: str = Form(...), description: s
     user = get_current_user(request)
     if not user or user.get("role") not in ("admin", "barber"):
         return RedirectResponse(url="/login", status_code=303)
+    import math
+    name, description, category, image_url = (
+        name.strip(), description.strip(), category.strip(), image_url.strip()
+    )
+    if (not name or len(name) > 120 or len(description) > 2000 or
+            not category or len(category) > 80 or len(image_url) > 1000 or
+            not math.isfinite(price) or price < 0 or price > 1_000_000 or
+            stock < 0 or stock > 1_000_000):
+        return RedirectResponse(url="/admin/produtos?erro=dados", status_code=303)
+    if image_url:
+        from urllib.parse import urlsplit
+        parsed_image = urlsplit(image_url)
+        if parsed_image.scheme not in {"https", "http"} or not parsed_image.hostname:
+            return RedirectResponse(url="/admin/produtos?erro=imagem", status_code=303)
     db = get_db()
-    if product_id:
-        db.execute("UPDATE products SET name=?, description=?, price=?, stock=?, category=?, image_url=? WHERE id=?",
-                   (name, description, price, stock, category, image_url, product_id))
-    else:
-        db.execute("INSERT INTO products (name, description, price, stock, category, image_url) VALUES (?,?,?,?,?,?)",
-                   (name, description, price, stock, category, image_url))
-    db.commit()
-    db.close()
-    return RedirectResponse(url="/admin/produtos", status_code=303)
+    try:
+        if product_id:
+            changed = db.execute(
+                "UPDATE products SET name=?, description=?, price=?, stock=?, category=?, image_url=? WHERE id=?",
+                (name, description, price, stock, category, image_url, product_id),
+            )
+            if changed.rowcount != 1:
+                db.rollback()
+                return RedirectResponse(url="/admin/produtos?erro=nao_encontrado", status_code=303)
+        else:
+            db.execute(
+                "INSERT INTO products (name, description, price, stock, category, image_url) VALUES (?,?,?,?,?,?)",
+                (name, description, price, stock, category, image_url),
+            )
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/produtos?salvo=1", status_code=303)
 
 
 @app.post("/admin/produtos/excluir")
