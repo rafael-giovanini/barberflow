@@ -60,7 +60,7 @@
           <td>{{ b.barber_name }}</td>
           <td>{{ b.completed_services }}</td>
           <td>R$ {{ "%.2f"|format(b.production_cents / 100) }}</td>
-          <td>{{ "%.2f"|format(b.commission_percent) }}%</td>
+          <td><form method="POST" action="/admin/financeiro/comissao" style="display:flex;gap:6px;align-items:center;"><input type="hidden" name="barber_id" value="{{ b.barber_id }}"><input type="number" name="commission_percent" min="0" max="100" step="0.01" value="{{ "%.2f"|format(b.commission_percent) }}" required style="width:90px;"><button class="btn btn-outline btn-sm" type="submit">Salvar</button></form></td>
           <td>R$ {{ "%.2f"|format((b.production_cents * b.commission_percent / 100) / 100) }}</td>
         </tr>
       {% endfor %}
