@@ -31,6 +31,8 @@
       <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(totals.expense_cents / 100) }}</div><div class="stat-label">Despesas pagas</div></div>
       <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(net_cents / 100) }}</div><div class="stat-label">Saldo do período</div></div>
       <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(totals.pending_cents / 100) }}</div><div class="stat-label">Lançamentos pendentes</div></div>
+      <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(stock_costs.cogs_cents / 100) }}</div><div class="stat-label">Custo estimado dos produtos vendidos</div></div>
+      <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format((store_revenue.income_cents - stock_costs.cogs_cents) / 100) }}</div><div class="stat-label">Margem bruta estimada da loja</div></div>
     </div>
 
     <h3 style="color:var(--dourado); margin:28px 0 16px;">Novo lançamento</h3>
@@ -48,6 +50,8 @@
       </label>
       <div style="align-self:end"><button class="btn btn-dourado" type="submit">Salvar lançamento</button></div>
     </form>
+
+    <p class="text-muted">Custo e margem da loja são estimativas: dependem dos custos cadastrados e do histórico de vendas a partir da implantação. Produtos antigos sem custo registrado podem aparecer com custo zero.</p>
 
     <h3 style="color:var(--dourado); margin:28px 0 16px;">Evolução mensal</h3>
     {% set max_month_value = ([1] + (monthly | map(attribute='income_cents') | list) + (monthly | map(attribute='expense_cents') | list)) | max %}
