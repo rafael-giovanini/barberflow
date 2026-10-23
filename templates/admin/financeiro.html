@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Financeiro — BarberFlow{% endblock %}
+{% block content %}
+<div class="admin-layout">
+  <aside class="admin-sidebar">
+    <a href="/admin">📊 Dashboard</a>
+    <a href="/admin/agenda">📅 Agenda</a>
+    <a href="/admin/servicos">✂️ Serviços</a>
+    <a href="/admin/produtos">🛍️ Produtos</a>
+    <a href="/admin/portfolio">📸 Portfólio</a>
+    <a href="/admin/barbeiros">👤 Barbeiros</a>
+    <a href="/admin/pedidos">📦 Pedidos</a>
+    <a href="/admin/financeiro" class="active">💰 Financeiro</a>
+    <a href="/admin/configuracoes">⚙️ Configurações</a>
+    <a href="/">🌐 Ver Site</a>
+    <a href="/logout">🚪 Sair</a>
+  </aside>
+
+  <div class="admin-content">
+    <h1>Financeiro</h1>
+    <p class="text-muted mb-4">Entradas e despesas lançadas manualmente no período selecionado. A produção concluída dos barbeiros aparece separadamente e não significa, por si só, valor recebido.</p>
+
+    <form method="GET" class="flex mb-4" style="gap:12px; flex-wrap:wrap;">
+      <label>De <input type="date" name="inicio" value="{{ inicio }}" required></label>
+      <label>Até <input type="date" name="fim" value="{{ fim }}" required></label>
+      <button class="btn btn-outline btn-sm" type="submit">Filtrar</button>
+    </form>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(totals.income_cents / 100) }}</div><div class="stat-label">Entradas recebidas</div></div>
+      <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(totals.expense_cents / 100) }}</div><div class="stat-label">Despesas pagas</div></div>
+      <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(net_cents / 100) }}</div><div class="stat-label">Saldo do período</div></div>
+      <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(totals.pending_cents / 100) }}</div><div class="stat-label">Lançamentos pendentes</div></div>
+    </div>
+
+    <h3 style="color:var(--dourado); margin:28px 0 16px;">Novo lançamento</h3>
+    <form method="POST" action="/admin/financeiro/lancamento" class="form-card" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+      <label>Tipo
+        <select name="transaction_type" required><option value="income">Entrada</option><option value="expense">Despesa</option></select>
+      </label>
+      <label>Categoria <input name="category" maxlength="80" required placeholder="Ex.: aluguel, produto, serviço"></label>
+      <label>Descrição <input name="description" maxlength="240" required placeholder="Detalhes do lançamento"></label>
+      <label>Valor (R$) <input name="amount" inputmode="decimal" required placeholder="0,00"></label>
+      <label>Data <input type="date" name="occurred_on" value="{{ fim }}" required></label>
+      <label>Forma de pagamento <input name="payment_method" maxlength="40" placeholder="Pix, dinheiro, cartão..."></label>
+      <label>Status
+        <select name="status" required><option value="paid">Pago/recebido</option><option value="pending">Pendente</option><option value="cancelled">Cancelado</option></select>
+      </label>
+      <div style="align-self:end"><button class="btn btn-dourado" type="submit">Salvar lançamento</button></div>
+    </form>
+
+    <h3 style="color:var(--dourado); margin:28px 0 16px;">Produção por barbeiro</h3>
+    <p class="text-muted">Produção calculada com o preço atual do serviço e agendamentos concluídos. Configure as taxas de comissão antes de usar os valores como folha de pagamento; o sistema ainda não guarda o preço histórico do serviço no agendamento.</p>
+    {% if production %}
+    <table class="admin-table">
+      <thead><tr><th>Barbeiro</th><th>Serviços concluídos</th><th>Produção estimada</th><th>Comissão cadastrada</th><th>Comissão estimada</th></tr></thead>
+      <tbody>
+      {% for b in production %}
+        <tr>
+          <td>{{ b.barber_name }}</td>
+          <td>{{ b.completed_services }}</td>
+          <td>R$ {{ "%.2f"|format(b.production_cents / 100) }}</td>
+          <td>{{ "%.2f"|format(b.commission_percent) }}%</td>
+          <td>R$ {{ "%.2f"|format((b.production_cents * b.commission_percent / 100) / 100) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="text-muted">Nenhum barbeiro ativo cadastrado.</p>{% endif %}
+
+    <h3 style="color:var(--dourado); margin:28px 0 16px;">Lançamentos do período</h3>
+    {% if transactions %}
+    <table class="admin-table">
+      <thead><tr><th>Data</th><th>Tipo</th><th>Categoria / descrição</th><th>Forma</th><th>Status</th><th>Valor</th></tr></thead>
+      <tbody>
+      {% for t in transactions %}
+        <tr>
+          <td>{{ t.occurred_on }}</td>
+          <td>{{ "Entrada" if t.transaction_type == "income" else "Despesa" }}</td>
+          <td>{{ t.category }}<br><small class="text-muted">{{ t.description }}</small></td>
+          <td>{{ t.payment_method or "—" }}</td>
+          <td>{{ {"paid":"Pago/recebido","pending":"Pendente","cancelled":"Cancelado"}.get(t.status, t.status) }}</td>
+          <td>R$ {{ "%.2f"|format(t.amount_cents / 100) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="text-muted">Nenhum lançamento encontrado nesse período.</p>{% endif %}
+  </div>
+</div>
+{% endblock %}
