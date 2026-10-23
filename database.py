@@ -235,6 +235,9 @@ def init_db():
     ON financial_transactions(occurred_on, status, transaction_type)
     """)
 
+    financial_columns = {row["name"] for row in c.execute("PRAGMA table_info(financial_transactions)").fetchall()}
+    if "appointment_id" not in financial_columns:
+        c.execute("ALTER TABLE financial_transactions ADD COLUMN appointment_id INTEGER REFERENCES appointments(id)")
     c.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_transactions_appointment_unique
     ON financial_transactions(appointment_id)
