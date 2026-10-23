@@ -992,5 +992,60 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertIsNone(finance)
 
 
+    def test_stock_purchase_updates_quantity_and_weighted_average_cost(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO products (name, price, cost_price, stock, category, active)
+            VALUES ('Pomada teste', 20.00, 5.00, 10, 'Modelagem', 1)
+        """)
+        product_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        response = self.client.post("/admin/estoque/entrada", data={
+            "product_id": product_id, "quantity": 10, "unit_cost": "7.00", "note": "Fornecedor teste"
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("entrada=1", response.headers["location"])
+
+        db = self.app_module.get_db()
+        product = db.execute("SELECT stock, cost_price FROM products WHERE id=?", (product_id,)).fetchone()
+        movement = db.execute("""
+            SELECT movement_type, quantity, unit_cost_cents, note
+            FROM stock_movements WHERE product_id=? ORDER BY id DESC LIMIT 1
+        """, (product_id,)).fetchone()
+        db.close()
+        self.assertEqual(product["stock"], 20)
+        self.assertAlmostEqual(product["cost_price"], 6.00)
+        self.assertEqual(movement["movement_type"], "purchase")
+        self.assertEqual(movement["quantity"], 10)
+        self.assertEqual(movement["unit_cost_cents"], 700)
+        self.assertEqual(movement["note"], "Fornecedor teste")
+
+    def test_barber_cannot_register_stock_purchase(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO products (name, price, cost_price, stock, category, active)
+            VALUES ('Gel teste', 15.00, 4.00, 3, 'Cabelo', 1)
+        """)
+        product_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+
+        self._login("barber@example.test")
+        response = self.client.post("/admin/estoque/entrada", data={
+            "product_id": product_id, "quantity": 5, "unit_cost": "3.50", "note": "Não autorizado"
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/login")
+        db = self.app_module.get_db()
+        product = db.execute("SELECT stock FROM products WHERE id=?", (product_id,)).fetchone()
+        movement = db.execute("SELECT id FROM stock_movements WHERE product_id=?", (product_id,)).fetchone()
+        db.close()
+        self.assertEqual(product["stock"], 3)
+        self.assertIsNone(movement)
+
+
 if __name__ == "__main__":
     unittest.main()
