@@ -890,5 +890,58 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertAlmostEqual(rate["commission_percent"], 40.5)
 
 
+    def test_completed_appointment_creates_one_financial_income_and_can_be_reversed(self):
+        db = self.app_module.get_db()
+        db.execute("INSERT INTO barbers (name, active) VALUES ('Barbeiro Receita', 1)")
+        barber_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO services (name, price, duration_min, active)
+            VALUES ('Corte teste', 45.50, 30, 1)
+        """)
+        service_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO appointments
+                (user_id, barber_id, service_id, appointment_date, start_time, end_time,
+                 status, service_price_cents)
+            VALUES ((SELECT id FROM users WHERE email='cliente@example.test'),
+                    ?, ?, '2026-10-20', '10:00', '10:30', 'scheduled', 4550)
+        """, (barber_id, service_id))
+        appointment_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        first = self.client.post("/admin/agenda/status", json={
+            "appointment_id": appointment_id, "status": "completed"
+        })
+        second = self.client.post("/admin/agenda/status", json={
+            "appointment_id": appointment_id, "status": "completed"
+        })
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+
+        db = self.app_module.get_db()
+        rows = db.execute("""
+            SELECT amount_cents, status, appointment_id
+            FROM financial_transactions WHERE appointment_id=?
+        """, (appointment_id,)).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["amount_cents"], 4550)
+        self.assertEqual(rows[0]["status"], "paid")
+        db.close()
+
+        cancelled = self.client.post("/admin/agenda/status", json={
+            "appointment_id": appointment_id, "status": "cancelled"
+        })
+        self.assertEqual(cancelled.status_code, 200)
+        db = self.app_module.get_db()
+        row = db.execute(
+            "SELECT status FROM financial_transactions WHERE appointment_id=?",
+            (appointment_id,),
+        ).fetchone()
+        db.close()
+        self.assertEqual(row["status"], "cancelled")
+
+
 if __name__ == "__main__":
     unittest.main()
