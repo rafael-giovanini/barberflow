@@ -635,3 +635,30 @@ class SecurityRouteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_password_reset_response_does_not_disclose_account_existence(self):
+        unknown = self.client.post(
+            "/esqueci-senha", data={"email": "nao-existe@example.test"}
+        )
+        known = self.client.post(
+            "/esqueci-senha", data={"email": "cliente@example.test"}
+        )
+        self.assertEqual(unknown.status_code, 200)
+        self.assertEqual(known.status_code, 200)
+        self.assertEqual(unknown.text, known.text)
+        self.assertIn("Se o endereço estiver cadastrado", unknown.text)
+
+    def test_password_reset_with_unconfigured_smtp_does_not_create_token(self):
+        response = self.client.post(
+            "/esqueci-senha", data={"email": "cliente@example.test"}
+        )
+        self.assertEqual(response.status_code, 200)
+        db = self.app_module.get_db()
+        count = db.execute(
+            """SELECT COUNT(*) AS total FROM password_reset_tokens
+               WHERE email=?""",
+            ("cliente@example.test",),
+        ).fetchone()["total"]
+        db.close()
+        self.assertEqual(count, 0)
+
