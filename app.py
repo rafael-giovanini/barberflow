@@ -559,6 +559,11 @@ async def api_cart_update(request: Request):
         db.close()
         if not product:
             return JSONResponse({"ok": False, "error": "Produto indisponível."}, status_code=404)
+        if product["stock"] < 1:
+            return JSONResponse(
+                {"ok": False, "error": "Produto sem estoque disponível."},
+                status_code=409,
+            )
         cart.append({"product_id": pid, "qty": min(qty, product["stock"], 20)})
     resp = JSONResponse({"ok": True})
     resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7, httponly=True,
