@@ -15,6 +15,19 @@ class PasswordHashTests(unittest.TestCase):
         password = "Senha-de-teste-2026!"
         self.assertNotEqual(hash_password(password), hash_password(password))
 
+    def test_rejects_unknown_hash_algorithm(self):
+        valid = hash_password("Senha-de-teste-2026!")
+        self.assertFalse(verify_password("Senha-de-teste-2026!", valid.replace("pbkdf2$", "unknown$", 1)))
+
+    def test_rejects_excessive_iteration_count_without_hashing(self):
+        malformed = "pbkdf2$999999999$73616c74$" + ("0" * 64)
+        self.assertFalse(verify_password("senha", malformed))
+
+    def test_rejects_malformed_hash_fields(self):
+        self.assertFalse(verify_password("senha", "pbkdf2$600000$not-hex$" + ("0" * 64)))
+        self.assertFalse(verify_password("senha", "pbkdf2$600000$73616c74$xyz"))
+        self.assertFalse(verify_password("senha", "pbkdf2$0$73616c74$" + ("0" * 64)))
+
 
 if __name__ == "__main__":
     unittest.main()
