@@ -243,6 +243,15 @@ def init_db():
     ON financial_transactions(appointment_id)
     WHERE appointment_id IS NOT NULL
     """)
+    # Impede duplicar a receita associada ao mesmo pedido da loja.
+    financial_columns = {row["name"] for row in c.execute("PRAGMA table_info(financial_transactions)").fetchall()}
+    if "order_id" not in financial_columns:
+        c.execute("ALTER TABLE financial_transactions ADD COLUMN order_id INTEGER REFERENCES orders(id)")
+    c.execute("""
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_transactions_order_unique
+    ON financial_transactions(order_id)
+    WHERE order_id IS NOT NULL
+    """)
     c.execute("""
     CREATE TABLE IF NOT EXISTS barber_commission_settings (
         barber_id INTEGER PRIMARY KEY,
