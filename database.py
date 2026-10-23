@@ -98,6 +98,29 @@ def init_db():
     )
     """)
 
+    # Custo unitário e trilha de auditoria do estoque, com migração não destrutiva.
+    product_columns = {row["name"] for row in c.execute("PRAGMA table_info(products)").fetchall()}
+    if "cost_price" not in product_columns:
+        c.execute("ALTER TABLE products ADD COLUMN cost_price REAL NOT NULL DEFAULT 0")
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS stock_movements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER NOT NULL,
+        movement_type TEXT NOT NULL CHECK (movement_type IN ('opening', 'purchase', 'sale', 'adjustment', 'return')),
+        quantity INTEGER NOT NULL CHECK (quantity <> 0),
+        unit_cost_cents INTEGER NOT NULL DEFAULT 0 CHECK (unit_cost_cents >= 0),
+        note TEXT,
+        order_id INTEGER,
+        created_by INTEGER,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (product_id) REFERENCES products(id),
+        FOREIGN KEY (order_id) REFERENCES orders(id),
+        FOREIGN KEY (created_by) REFERENCES users(id)
+    )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_stock_movements_product_date ON stock_movements(product_id, created_at DESC)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_stock_movements_order ON stock_movements(order_id)")
+
     # Portfólio (modelos de corte com explicação)
     c.execute("""
     CREATE TABLE IF NOT EXISTS portfolio (
