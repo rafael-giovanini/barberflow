@@ -838,6 +838,19 @@ def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Option
             WHERE transaction_type='income' AND status='paid' AND order_id IS NOT NULL
               AND occurred_on BETWEEN ? AND ?
         """, (inicio, fim)).fetchone()
+        product_performance = db.execute("""
+            SELECT p.id AS product_id, p.name AS product_name,
+                   SUM(ABS(m.quantity)) AS quantity_sold,
+                   COALESCE(SUM(ABS(m.quantity) * CAST(ROUND(oi.price * 100) AS INTEGER)), 0) AS sales_cents,
+                   COALESCE(SUM(ABS(m.quantity) * m.unit_cost_cents), 0) AS cost_cents
+            FROM stock_movements m
+            JOIN products p ON p.id=m.product_id
+            LEFT JOIN order_items oi ON oi.order_id=m.order_id AND oi.product_id=m.product_id
+            WHERE m.movement_type='sale'
+              AND substr(m.created_at, 1, 10) BETWEEN ? AND ?
+            GROUP BY p.id, p.name
+            ORDER BY sales_cents DESC, p.name
+        """, (inicio, fim)).fetchall()
         transactions = db.execute("""
             SELECT t.*, b.name AS barber_name, u.name AS creator_name
             FROM financial_transactions t
@@ -880,6 +893,7 @@ def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Option
         "request": request, "user": user, "inicio": inicio, "fim": fim,
         "totals": totals, "transactions": transactions, "production": production, "monthly": monthly,
         "stock_costs": stock_costs, "store_revenue": store_revenue,
+        "product_performance": product_performance,
         "net_cents": totals["income_cents"] - totals["expense_cents"],
     })
 
