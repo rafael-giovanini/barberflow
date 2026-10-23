@@ -35,7 +35,20 @@
           <td class="text-dourado">R$ {{ "%.2f"|format(o.total) }}</td>
           <td><small>{{ o.address }}</small></td>
           <td><small>{{ o.payment_method }}</small></td>
-          <td><span class="badge badge-{{ o.status }}">{{ o.status }}</span></td>
+          <td>
+            <span class="badge badge-{{ o.status }}">{{ o.status }}</span>
+            {% if user.role == "admin" %}
+            <form method="POST" action="/admin/pedidos/status" style="display:grid;gap:5px;margin-top:6px;">
+              <input type="hidden" name="order_id" value="{{ o.id }}">
+              <select name="status" aria-label="Status do pedido #{{ o.id }}">
+                <option value="pending" {% if o.status == "pending" %}selected{% endif %}>Pendente</option>
+                <option value="paid" {% if o.status == "paid" %}selected{% endif %}>Pago</option>
+                <option value="cancelled" {% if o.status == "cancelled" %}selected{% endif %}>Cancelado</option>
+              </select>
+              <button class="btn btn-outline btn-sm" type="submit">Atualizar</button>
+            </form>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
