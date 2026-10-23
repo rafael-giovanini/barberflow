@@ -779,5 +779,116 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertIsNone(row)
 
 
+    def test_financial_dashboard_is_admin_only(self):
+        self._login("barber@example.test")
+        response = self.client.get("/admin/financeiro")
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/login")
+
+        self.client.cookies.clear()
+        self._login("admin@example.test")
+        allowed = self.client.get("/admin/financeiro")
+        self.assertEqual(allowed.status_code, 200)
+        self.assertIn("Entradas recebidas", allowed.text)
+
+    def test_financial_transaction_uses_cents_and_updates_summary(self):
+        self._login("admin@example.test")
+        response = self.client.post("/admin/financeiro/lancamento", data={
+            "transaction_type": "income",
+            "category": "Serviço",
+            "description": "Recebimento teste",
+            "amount": "125,90",
+            "occurred_on": "2026-10-20",
+            "payment_method": "Pix",
+            "status": "paid",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("salvo=1", response.headers["location"])
+
+        db = self.app_module.get_db()
+        row = db.execute(
+            "SELECT amount_cents, transaction_type, status FROM financial_transactions "
+            "WHERE description='Recebimento teste'"
+        ).fetchone()
+        db.close()
+        self.assertEqual(dict(row), {
+            "amount_cents": 12590, "transaction_type": "income", "status": "paid"
+        })
+
+        report = self.client.get("/admin/financeiro?inicio=2026-10-01&fim=2026-10-31")
+        self.assertEqual(report.status_code, 200)
+        self.assertIn("125.90", report.text)
+
+    def test_financial_transaction_rejects_invalid_amount(self):
+        self._login("admin@example.test")
+        response = self.client.post("/admin/financeiro/lancamento", data={
+            "transaction_type": "expense",
+            "category": "Teste",
+            "description": "Valor inválido",
+            "amount": "-50",
+            "occurred_on": "2026-10-20",
+            "payment_method": "Dinheiro",
+            "status": "paid",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("erro=dados", response.headers["location"])
+        db = self.app_module.get_db()
+        row = db.execute(
+            "SELECT id FROM financial_transactions WHERE description='Valor inválido'"
+        ).fetchone()
+        db.close()
+        self.assertIsNone(row)
+
+    def test_barber_cannot_create_financial_transaction(self):
+        self._login("barber@example.test")
+        response = self.client.post("/admin/financeiro/lancamento", data={
+            "transaction_type": "expense",
+            "category": "Teste",
+            "description": "Despesa não autorizada",
+            "amount": "10",
+            "occurred_on": "2026-10-20",
+            "payment_method": "Pix",
+            "status": "paid",
+        })
+        self.assertEqual(response.status_code, 303)
+        db = self.app_module.get_db()
+        row = db.execute(
+            "SELECT id FROM financial_transactions WHERE description='Despesa não autorizada'"
+        ).fetchone()
+        db.close()
+        self.assertIsNone(row)
+
+    def test_commission_rate_is_admin_only_and_validated(self):
+        db = self.app_module.get_db()
+        db.execute("INSERT INTO barbers (name, active) VALUES (?, 1)", ("Barbeiro financeiro",))
+        barber_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+
+        self._login("barber@example.test")
+        denied = self.client.post("/admin/financeiro/comissao", data={
+            "barber_id": barber_id, "commission_percent": "40"
+        })
+        self.assertEqual(denied.status_code, 303)
+
+        self.client.cookies.clear()
+        self._login("admin@example.test")
+        invalid = self.client.post("/admin/financeiro/comissao", data={
+            "barber_id": barber_id, "commission_percent": "150"
+        })
+        self.assertIn("erro=comissao", invalid.headers["location"])
+        valid = self.client.post("/admin/financeiro/comissao", data={
+            "barber_id": barber_id, "commission_percent": "40,5"
+        })
+        self.assertEqual(valid.status_code, 303)
+        db = self.app_module.get_db()
+        rate = db.execute(
+            "SELECT commission_percent FROM barber_commission_settings WHERE barber_id=?",
+            (barber_id,),
+        ).fetchone()
+        db.close()
+        self.assertAlmostEqual(rate["commission_percent"], 40.5)
+
+
 if __name__ == "__main__":
     unittest.main()
