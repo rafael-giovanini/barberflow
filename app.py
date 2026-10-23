@@ -833,7 +833,7 @@ def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Option
         production = db.execute("""
             SELECT b.id AS barber_id, b.name AS barber_name,
                    COUNT(a.id) AS completed_services,
-                   COALESCE(SUM(CAST(ROUND(s.price * 100) AS INTEGER)), 0) AS production_cents,
+                   COALESCE(SUM(COALESCE(a.service_price_cents, CAST(ROUND(s.price * 100) AS INTEGER))), 0) AS production_cents,
                    COALESCE(cs.commission_percent, 0) AS commission_percent
             FROM barbers b
             LEFT JOIN appointments a
@@ -1001,6 +1001,43 @@ async def admin_agenda_status(request: Request):
                 {"ok": False, "error": "Agendamento não encontrado ou sem permissão."},
                 status_code=404,
             )
+
+        # Gera/atualiza o lançamento vinculado ao atendimento de forma idempotente.
+        # A unicidade de appointment_id impede duplicar a receita ao clicar duas vezes.
+        appointment = db.execute("""
+            SELECT a.id, a.barber_id, a.service_price_cents, s.price
+            FROM appointments a
+            JOIN services s ON s.id = a.service_id
+            WHERE a.id = ?
+        """, (appointment_id,)).fetchone()
+        if status == "completed" and appointment:
+            price_cents = appointment["service_price_cents"]
+            if price_cents is None:
+                price_cents = int(round(float(appointment["price"]) * 100))
+                db.execute(
+                    "UPDATE appointments SET service_price_cents=? WHERE id=?",
+                    (price_cents, appointment_id),
+                )
+            if price_cents > 0:
+                db.execute("""
+                    INSERT INTO financial_transactions
+                        (transaction_type, category, description, amount_cents,
+                         occurred_on, status, barber_id, appointment_id, created_by)
+                    VALUES ('income', 'Serviços', ?, ?, date('now', 'localtime'),
+                            'paid', ?, ?, ?)
+                    ON CONFLICT(appointment_id) WHERE appointment_id IS NOT NULL
+                    DO UPDATE SET status='paid', amount_cents=excluded.amount_cents,
+                                  barber_id=excluded.barber_id
+                """, (
+                    f"Atendimento concluído #{appointment_id}", price_cents,
+                    appointment["barber_id"], appointment_id, user["user_id"],
+                ))
+        else:
+            # Se o atendimento for reaberto ou cancelado, não o mantém como receita paga.
+            db.execute("""
+                UPDATE financial_transactions SET status='cancelled'
+                WHERE appointment_id=? AND transaction_type='income'
+            """, (appointment_id,))
         db.commit()
     finally:
         db.close()
