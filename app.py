@@ -855,6 +855,43 @@ def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Option
     })
 
 
+
+@app.post("/admin/financeiro/comissao")
+def admin_financeiro_comissao(
+    request: Request,
+    barber_id: int = Form(...),
+    commission_percent: str = Form(...),
+):
+    """Define a taxa de comissão por barbeiro; somente administrador pode alterar."""
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+    import math
+    try:
+        rate = float(commission_percent.strip().replace(",", "."))
+    except (TypeError, ValueError, AttributeError):
+        return RedirectResponse(url="/admin/financeiro?erro=comissao", status_code=303)
+    if not math.isfinite(rate) or rate < 0 or rate > 100:
+        return RedirectResponse(url="/admin/financeiro?erro=comissao", status_code=303)
+
+    db = get_db()
+    try:
+        exists = db.execute("SELECT id FROM barbers WHERE id=? AND active=1", (barber_id,)).fetchone()
+        if not exists:
+            return RedirectResponse(url="/admin/financeiro?erro=barbeiro", status_code=303)
+        db.execute("""
+            INSERT INTO barber_commission_settings (barber_id, commission_percent)
+            VALUES (?, ?)
+            ON CONFLICT(barber_id) DO UPDATE SET
+                commission_percent=excluded.commission_percent,
+                updated_at=CURRENT_TIMESTAMP
+        """, (barber_id, rate))
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/financeiro?salvo=comissao", status_code=303)
+
+
 @app.post("/admin/financeiro/lancamento")
 def admin_financeiro_lancamento(
     request: Request,
