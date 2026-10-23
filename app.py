@@ -955,6 +955,70 @@ def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Option
 
 
 
+@app.get("/admin/financeiro/exportar.csv")
+def admin_financeiro_exportar(request: Request, inicio: Optional[str] = None, fim: Optional[str] = None):
+    """Exporta lançamentos financeiros do período em CSV, exclusivo para administradores."""
+    import csv
+    import io
+
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    inicio = inicio or today[:8] + "01"
+    fim = fim or today
+    try:
+        start_date = datetime.strptime(inicio, "%Y-%m-%d").date()
+        end_date = datetime.strptime(fim, "%Y-%m-%d").date()
+        if start_date > end_date or (end_date - start_date).days > 366:
+            raise ValueError
+    except (TypeError, ValueError):
+        return RedirectResponse(url="/admin/financeiro?erro=periodo", status_code=303)
+
+    db = get_db()
+    try:
+        rows = db.execute("""
+            SELECT t.occurred_on, t.transaction_type, t.category, t.description,
+                   t.amount_cents, t.payment_method, t.status,
+                   b.name AS barber_name, u.name AS creator_name
+            FROM financial_transactions t
+            LEFT JOIN barbers b ON b.id=t.barber_id
+            LEFT JOIN users u ON u.id=t.created_by
+            WHERE t.occurred_on BETWEEN ? AND ?
+            ORDER BY t.occurred_on, t.id
+        """, (inicio, fim)).fetchall()
+    finally:
+        db.close()
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, delimiter=";", lineterminator="\r\n")
+    writer.writerow(["Data", "Tipo", "Categoria", "Descrição", "Valor (R$)",
+                     "Forma de pagamento", "Status", "Barbeiro", "Registrado por"])
+    for row in rows:
+        # Evita que campos textuais iniciados por caracteres de fórmula sejam
+        # interpretados como fórmulas por planilhas ao abrir o CSV.
+        values = []
+        for key in ("category", "description", "payment_method", "barber_name", "creator_name"):
+            value = row[key] or ""
+            if str(value).lstrip().startswith(("=", "+", "-", "@")):
+                value = "'" + str(value)
+            values.append(value)
+        writer.writerow([
+            row["occurred_on"],
+            "Entrada" if row["transaction_type"] == "income" else "Despesa",
+            values[0], values[1], f'{row["amount_cents"] / 100:.2f}',
+            values[2], row["status"], values[3], values[4],
+        ])
+    filename = f"barberflow-financeiro-{inicio}-a-{fim}.csv"
+    return Response(
+        content="\\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"',
+                 "Cache-Control": "no-store"},
+    )
+
+
 @app.post("/admin/financeiro/comissao")
 def admin_financeiro_comissao(
     request: Request,
