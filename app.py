@@ -826,6 +826,18 @@ def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Option
             FROM financial_transactions
             WHERE occurred_on BETWEEN ? AND ?
         """, (inicio, fim)).fetchone()
+        stock_costs = db.execute("""
+            SELECT COALESCE(SUM(ABS(m.quantity) * m.unit_cost_cents), 0) AS cogs_cents
+            FROM stock_movements m
+            WHERE m.movement_type='sale'
+              AND substr(m.created_at, 1, 10) BETWEEN ? AND ?
+        """, (inicio, fim)).fetchone()
+        store_revenue = db.execute("""
+            SELECT COALESCE(SUM(amount_cents), 0) AS income_cents
+            FROM financial_transactions
+            WHERE transaction_type='income' AND status='paid' AND order_id IS NOT NULL
+              AND occurred_on BETWEEN ? AND ?
+        """, (inicio, fim)).fetchone()
         transactions = db.execute("""
             SELECT t.*, b.name AS barber_name, u.name AS creator_name
             FROM financial_transactions t
@@ -867,6 +879,7 @@ def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Option
     return templates.TemplateResponse("admin/financeiro.html", {
         "request": request, "user": user, "inicio": inicio, "fim": fim,
         "totals": totals, "transactions": transactions, "production": production, "monthly": monthly,
+        "stock_costs": stock_costs, "store_revenue": store_revenue,
         "net_cents": totals["income_cents"] - totals["expense_cents"],
     })
 
