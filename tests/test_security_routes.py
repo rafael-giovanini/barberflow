@@ -633,10 +633,94 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(response.headers["x-content-type-options"], "nosniff")
 
 
+    def test_password_reset_response_does_not_disclose_account_existence(self):
+        unknown = self.client.post(
+            "/esqueci-senha", data={"email": "nao-existe@example.test"}
+        )
+        known = self.client.post(
+            "/esqueci-senha", data={"email": "cliente@example.test"}
+        )
+        self.assertEqual(unknown.status_code, 200)
+        self.assertEqual(known.status_code, 200)
+        self.assertEqual(unknown.text, known.text)
+        self.assertIn("Se o endereço estiver cadastrado", unknown.text)
+
+    def test_password_reset_with_unconfigured_smtp_does_not_create_token(self):
+        response = self.client.post(
+            "/esqueci-senha", data={"email": "cliente@example.test"}
+        )
+        self.assertEqual(response.status_code, 200)
+        db = self.app_module.get_db()
+        count = db.execute(
+            """SELECT COUNT(*) AS total FROM password_reset_tokens
+               WHERE email=?""",
+            ("cliente@example.test",),
+        ).fetchone()["total"]
+        db.close()
+        self.assertEqual(count, 0)
+
+    def test_barber_cannot_change_another_barbers_appointment(self):
+        db = self.app_module.get_db()
+        barber_user = db.execute(
+            "SELECT id FROM users WHERE email=?", ("barber@example.test",)
+        ).fetchone()
+        customer = db.execute(
+            "SELECT id FROM users WHERE email=?", ("cliente@example.test",)
+        ).fetchone()
+        db.execute(
+            "INSERT INTO barbers (user_id, name) VALUES (?, ?)",
+            (barber_user["id"], "Barbeiro autenticado"),
+        )
+        own_barber_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("INSERT INTO barbers (name) VALUES (?)", ("Outro barbeiro",))
+        other_barber_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute(
+            "INSERT INTO services (name, price, duration_min) VALUES (?, ?, ?)",
+            ("Corte teste", 25, 30),
+        )
+        service_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute(
+            """INSERT INTO appointments
+               (user_id, barber_id, service_id, appointment_date, start_time, end_time)
+               VALUES (?, ?, ?, '2099-01-01', '10:00', '10:30')""",
+            (customer["id"], other_barber_id, service_id),
+        )
+        other_appointment_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute(
+            """INSERT INTO appointments
+               (user_id, barber_id, service_id, appointment_date, start_time, end_time)
+               VALUES (?, ?, ?, '2099-01-01', '11:00', '11:30')""",
+            (customer["id"], own_barber_id, service_id),
+        )
+        own_appointment_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+
+        self._login("barber@example.test")
+        denied = self.client.post("/admin/agenda/status", json={
+            "appointment_id": other_appointment_id, "status": "completed",
+        })
+        allowed = self.client.post("/admin/agenda/status", json={
+            "appointment_id": own_appointment_id, "status": "completed",
+        })
+        self.assertEqual(denied.status_code, 404)
+        self.assertEqual(allowed.status_code, 200)
+
+        db = self.app_module.get_db()
+        other_status = db.execute(
+            "SELECT status FROM appointments WHERE id=?", (other_appointment_id,)
+        ).fetchone()["status"]
+        own_status = db.execute(
+            "SELECT status FROM appointments WHERE id=?", (own_appointment_id,)
+        ).fetchone()["status"]
+        db.close()
+        self.assertEqual(other_status, "scheduled")
+        self.assertEqual(own_status, "completed")
+
+
 if __name__ == "__main__":
     unittest.main()
 
-    def test_password_reset_response_does_not_disclose_account_existence(self):
         unknown = self.client.post(
             "/esqueci-senha", data={"email": "nao-existe@example.test"}
         )
