@@ -763,12 +763,25 @@ def agenda_ics(token: str):
 
 # ---------- Área Administrativa (Barbeiro) ----------
 @app.get("/admin", response_class=HTMLResponse)
-def admin_dashboard(request: Request):
+def admin_dashboard(request: Request, mes: Optional[str] = None):
     user = get_current_user(request)
     if not user or user.get("role") not in ("admin", "barber"):
         return RedirectResponse(url="/login", status_code=303)
     db = get_db()
     today = datetime.now().strftime("%Y-%m-%d")
+    selected_month = mes or today[:7]
+    try:
+        month_start = datetime.strptime(selected_month + "-01", "%Y-%m-%d").date()
+        if selected_month != month_start.strftime("%Y-%m"):
+            raise ValueError
+        next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        month_end = (next_month - timedelta(days=1)).strftime("%Y-%m-%d")
+        month_start = month_start.strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        selected_month = today[:7]
+        month_start = today[:8] + "01"
+        next_month = (datetime.strptime(month_start, "%Y-%m-%d").date().replace(day=28) + timedelta(days=4)).replace(day=1)
+        month_end = (next_month - timedelta(days=1)).strftime("%Y-%m-%d")
     today_appts = db.execute("""
         SELECT a.*, s.name as service_name, u.name as customer_name, u.phone as customer_phone
         FROM appointments a
@@ -777,20 +790,51 @@ def admin_dashboard(request: Request):
         WHERE a.appointment_date=? AND a.status='scheduled'
         ORDER BY a.start_time
     """, (today,)).fetchall()
-    total_today = sum(a["service_price"] if "service_price" in a.keys() else 0 for a in today_appts)
-    # Recalcular total do dia
     total_valor = 0
     for a in today_appts:
         s = db.execute("SELECT price FROM services WHERE id=?", (a["service_id"],)).fetchone()
         total_valor += s["price"] if s else 0
-    pending_orders = db.execute("SELECT COUNT(*) as c FROM orders WHERE status='paid'").fetchone()["c"]
+    pending_orders = db.execute("SELECT COUNT(*) as c FROM orders WHERE status='pending'").fetchone()["c"]
     total_services = db.execute("SELECT COUNT(*) as c FROM services WHERE active=1").fetchone()["c"]
     total_products = db.execute("SELECT COUNT(*) as c FROM products WHERE active=1").fetchone()["c"]
+    management = None
+    if user.get("role") == "admin":
+        finance = db.execute("""
+            SELECT
+              COALESCE(SUM(CASE WHEN transaction_type='income' AND status='paid' THEN amount_cents ELSE 0 END),0) income_cents,
+              COALESCE(SUM(CASE WHEN transaction_type='expense' AND status='paid' THEN amount_cents ELSE 0 END),0) expense_cents,
+              COALESCE(SUM(CASE WHEN status='pending' THEN amount_cents ELSE 0 END),0) pending_cents
+            FROM financial_transactions WHERE occurred_on BETWEEN ? AND ?
+        """, (month_start, month_end)).fetchone()
+        inventory = db.execute("""
+            SELECT COALESCE(SUM(stock * CAST(ROUND(cost_price * 100) AS INTEGER)),0) stock_value_cents,
+                   COALESCE(SUM(CASE WHEN stock <= 3 THEN 1 ELSE 0 END),0) low_stock_count
+            FROM products WHERE active=1
+        """).fetchone()
+        barber_rows = db.execute("""
+            SELECT b.name barber_name, COUNT(a.id) completed_services,
+                   COALESCE(SUM(COALESCE(a.service_price_cents, CAST(ROUND(s.price * 100) AS INTEGER))),0) production_cents
+            FROM appointments a
+            JOIN barbers b ON b.id=a.barber_id
+            JOIN services s ON s.id=a.service_id
+            WHERE a.status='completed' AND a.appointment_date BETWEEN ? AND ?
+            GROUP BY b.id,b.name ORDER BY production_cents DESC
+        """, (month_start, month_end)).fetchall()
+        management = {
+            "income_cents": finance["income_cents"],
+            "expense_cents": finance["expense_cents"],
+            "net_cents": finance["income_cents"] - finance["expense_cents"],
+            "pending_cents": finance["pending_cents"],
+            "stock_value_cents": inventory["stock_value_cents"],
+            "low_stock_count": inventory["low_stock_count"],
+            "barbers": barber_rows,
+        }
     db.close()
     return templates.TemplateResponse("admin/dashboard.html", {
         "request": request, "user": user, "today_appts": today_appts,
         "total_valor": total_valor, "pending_orders": pending_orders,
         "total_services": total_services, "total_products": total_products, "today": today,
+        "selected_month": selected_month, "management": management,
     })
 
 
