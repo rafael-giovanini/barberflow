@@ -465,7 +465,7 @@ async def api_agendar(request: Request):
     db = get_db()
     try:
         barber = db.execute("SELECT * FROM barbers WHERE id=? AND active=1", (barber_id,)).fetchone()
-        service = db.execute("SELECT duration_min FROM services WHERE id=? AND active=1", (service_id,)).fetchone()
+        service = db.execute("SELECT duration_min, price FROM services WHERE id=? AND active=1", (service_id,)).fetchone()
         if not barber or not service:
             return JSONResponse({"ok": False, "error": "Barbeiro ou serviço indisponível."}, status_code=400)
         end = start + timedelta(minutes=service["duration_min"])
@@ -490,10 +490,10 @@ async def api_agendar(request: Request):
             db.rollback()
             return JSONResponse({"ok": False, "error": "Horário já reservado, escolha outro."}, status_code=409)
         db.execute("""
-            INSERT INTO appointments (user_id, barber_id, service_id, appointment_date, start_time, end_time, notes)
-            VALUES (?,?,?,?,?,?,?)
+            INSERT INTO appointments (user_id, barber_id, service_id, appointment_date, start_time, end_time, notes, service_price_cents)
+            VALUES (?,?,?,?,?,?,?,?)
         """, (user["user_id"], barber_id, service_id, appointment_date.isoformat(),
-              start.strftime("%H:%M"), end.strftime("%H:%M"), notes))
+              start.strftime("%H:%M"), end.strftime("%H:%M"), notes, int(round(float(service["price"]) * 100))))
         db.commit()
     except (ValueError, TypeError, KeyError, json.JSONDecodeError):
         db.rollback()
