@@ -1454,6 +1454,14 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(reversal_row["amount_cents"], 1000)
         self.assertEqual(return_count, 1)
 
+        today = datetime.now().strftime("%Y-%m-%d")
+        report = self.client.get(f"/admin/financeiro?inicio={today}&fim={today}")
+        self.assertEqual(report.status_code, 200)
+        self.assertRegex(
+            report.text,
+            r'R\$ 0\.00</div><div class="stat-label">Margem bruta estimada da loja',
+        )
+
     def test_paid_order_cannot_be_cancelled_before_financial_reversal(self):
         db = self.app_module.get_db()
         db.execute("""
