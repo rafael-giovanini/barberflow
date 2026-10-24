@@ -207,6 +207,49 @@ class SecurityRouteTests(unittest.TestCase):
         self.client.get("/logout")
         self.assertEqual(self._login("cliente@example.test", "OutraSenha-789").status_code, 200)
 
+    def test_invalid_password_reset_attempt_does_not_consume_valid_token(self):
+        db = self.app_module.get_db()
+        user = db.execute("SELECT id FROM users WHERE email=?", ("cliente@example.test",)).fetchone()
+        raw_token = "token-preservado-apos-senha-invalida"
+        now = datetime.now(timezone.utc)
+        db.execute(
+            """INSERT INTO password_reset_tokens
+               (user_id, email, token_hash, expires_at, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (user["id"], "cliente@example.test",
+             hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+             (now + timedelta(minutes=30)).isoformat(), now.isoformat()),
+        )
+        db.commit()
+        db.close()
+
+        # Uma senha inválida deve ser recusada sem consumir o token.
+        invalid = self.client.post("/redefinir-senha", data={
+            "token": raw_token,
+            "new_password": "curta",
+            "confirm_password": "curta",
+        })
+        self.assertEqual(invalid.status_code, 200)
+        self.assertIn("A senha deve ter pelo menos 8 caracteres.", invalid.text)
+
+        db = self.app_module.get_db()
+        token = db.execute(
+            "SELECT used_at FROM password_reset_tokens WHERE token_hash=?",
+            (hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),),
+        ).fetchone()
+        db.close()
+        self.assertIsNone(token["used_at"])
+
+        # O mesmo token deve funcionar quando a senha for corrigida.
+        valid = self.client.post("/redefinir-senha", data={
+            "token": raw_token,
+            "new_password": "SenhaNova-456",
+            "confirm_password": "SenhaNova-456",
+        })
+        self.assertEqual(valid.status_code, 303)
+        self.assertEqual(valid.headers["location"], "/login?senha_redefinida=1")
+        self.assertEqual(self._login("cliente@example.test", "SenhaNova-456").status_code, 303)
+
     def test_expired_password_reset_token_is_rejected(self):
         db = self.app_module.get_db()
         user = db.execute("SELECT id FROM users WHERE email=?", ("cliente@example.test",)).fetchone()
