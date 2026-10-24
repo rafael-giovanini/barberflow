@@ -259,6 +259,13 @@ def init_db():
     """)
 
     financial_columns = {row["name"] for row in c.execute("PRAGMA table_info(financial_transactions)").fetchall()}
+    if "reversal_of_id" not in financial_columns:
+        c.execute("ALTER TABLE financial_transactions ADD COLUMN reversal_of_id INTEGER REFERENCES financial_transactions(id)")
+    c.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_transactions_reversal_unique
+        ON financial_transactions(reversal_of_id)
+        WHERE reversal_of_id IS NOT NULL
+    """)
     if "appointment_id" not in financial_columns:
         c.execute("ALTER TABLE financial_transactions ADD COLUMN appointment_id INTEGER REFERENCES appointments(id)")
     c.execute("""
