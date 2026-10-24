@@ -1180,6 +1180,26 @@ async def admin_agenda_status(request: Request):
         return JSONResponse({"ok": False, "error": "Status inválido."}, status_code=400)
     db = get_db()
     try:
+        # Verifica primeiro se o agendamento existe e se o usuário pode acessá-lo.
+        # Assim, a proteção financeira não revela dados de atendimentos alheios.
+        if user.get("role") == "barber":
+            permitted_appointment = db.execute("""
+                SELECT id FROM appointments
+                WHERE id=? AND barber_id IN (
+                    SELECT id FROM barbers WHERE user_id=?
+                )
+            """, (appointment_id, user["user_id"])).fetchone()
+        else:
+            permitted_appointment = db.execute(
+                "SELECT id FROM appointments WHERE id=?", (appointment_id,)
+            ).fetchone()
+        if not permitted_appointment:
+            db.rollback()
+            return JSONResponse(
+                {"ok": False, "error": "Agendamento não encontrado ou sem permissão."},
+                status_code=404,
+            )
+
         # Um recebimento confirmado não pode ser apagado implicitamente ao cancelar
         # ou reabrir o atendimento. Primeiro é necessário registrar o estorno no financeiro.
         paid_income = db.execute("""
