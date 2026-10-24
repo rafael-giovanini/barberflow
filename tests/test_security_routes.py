@@ -922,6 +922,21 @@ class SecurityRouteTests(unittest.TestCase):
         db.close()
         self.assertAlmostEqual(rate["commission_percent"], 40.5)
 
+        # Entradas inválidas não podem sobrescrever uma taxa válida já configurada.
+        for non_finite in ("NaN", "Infinity", "-Infinity", "101", "-1"):
+            invalid_update = self.client.post("/admin/financeiro/comissao", data={
+                "barber_id": barber_id, "commission_percent": non_finite
+            })
+            self.assertIn("erro=comissao", invalid_update.headers["location"])
+
+        db = self.app_module.get_db()
+        rate_after_invalid_updates = db.execute(
+            "SELECT commission_percent FROM barber_commission_settings WHERE barber_id=?",
+            (barber_id,),
+        ).fetchone()
+        db.close()
+        self.assertAlmostEqual(rate_after_invalid_updates["commission_percent"], 40.5)
+
 
     def test_completed_appointment_creates_one_financial_income_and_can_be_reversed(self):
         db = self.app_module.get_db()
