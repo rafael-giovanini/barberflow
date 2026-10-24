@@ -1192,6 +1192,30 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertNotIn("Produto cancelado relatório", response.text)
         self.assertIn("R$ 0.00", response.text)
 
+    def test_finance_summary_counts_only_paid_income_and_expenses(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on, status)
+            VALUES
+                ('income', 'Teste financeiro', 'Entrada paga', 1000, date('now'), 'paid'),
+                ('income', 'Teste financeiro', 'Entrada pendente', 500, date('now'), 'pending'),
+                ('income', 'Teste financeiro', 'Entrada cancelada', 300, date('now'), 'cancelled'),
+                ('expense', 'Teste financeiro', 'Despesa paga', 200, date('now'), 'paid'),
+                ('expense', 'Teste financeiro', 'Despesa pendente', 100, date('now'), 'pending')
+        """)
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        today = datetime.now().strftime("%Y-%m-%d")
+        response = self.client.get(f"/admin/financeiro?inicio={today}&fim={today}")
+        self.assertEqual(response.status_code, 200)
+        self.assertRegex(response.text, r'R\$ 10\.00</div><div class="stat-label">Entradas recebidas')
+        self.assertRegex(response.text, r'R\$ 2\.00</div><div class="stat-label">Despesas pagas')
+        self.assertRegex(response.text, r'R\$ 8\.00</div><div class="stat-label">Saldo do período')
+        self.assertRegex(response.text, r'R\$ 6\.00</div><div class="stat-label">Lançamentos pendentes')
+
     def test_finance_csv_export_neutralizes_spreadsheet_formulas(self):
         db = self.app_module.get_db()
         db.execute("""
