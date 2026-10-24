@@ -943,6 +943,52 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(row["status"], "cancelled")
 
 
+    def test_paid_appointment_income_cannot_be_cancelled_implicitly(self):
+        db = self.app_module.get_db()
+        db.execute("INSERT INTO barbers (name, active) VALUES ('Barbeiro Recebido', 1)")
+        barber_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO services (name, price, duration_min, active)
+            VALUES ('Corte recebido', 45.50, 30, 1)
+        """)
+        service_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO appointments
+                (user_id, barber_id, service_id, appointment_date, start_time, end_time,
+                 status, service_price_cents)
+            VALUES ((SELECT id FROM users WHERE email='cliente@example.test'),
+                    ?, ?, '2026-10-20', '10:00', '10:30', 'completed', 4550)
+        """, (barber_id, service_id))
+        appointment_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on,
+                 status, barber_id, appointment_id)
+            VALUES ('income', 'Serviços', 'Atendimento já recebido', 4550,
+                    '2026-10-20', 'paid', ?, ?)
+        """, (barber_id, appointment_id))
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        response = self.client.post("/admin/agenda/status", json={
+            "appointment_id": appointment_id, "status": "cancelled"
+        })
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "recebimento_confirmado")
+
+        db = self.app_module.get_db()
+        appointment = db.execute(
+            "SELECT status FROM appointments WHERE id=?", (appointment_id,)
+        ).fetchone()
+        transaction = db.execute(
+            "SELECT status FROM financial_transactions WHERE appointment_id=?",
+            (appointment_id,),
+        ).fetchone()
+        db.close()
+        self.assertEqual(appointment["status"], "completed")
+        self.assertEqual(transaction["status"], "paid")
+
     def test_paid_store_order_creates_one_financial_income(self):
         db = self.app_module.get_db()
         db.execute("""
