@@ -19,6 +19,15 @@
   <div class="admin-content">
     <h1>Financeiro</h1>
     <p class="text-muted mb-4">Registre movimentações e confirme o recebimento ou pagamento. Atendimentos concluídos entram como pendentes até o administrador confirmar o recebimento.</p>
+    {% if request.query_params.get('salvo') == 'estorno' %}
+    <p role="status" class="form-card">Estorno registrado. O lançamento original foi preservado e a contrapartida foi incluída no financeiro.</p>
+    {% elif request.query_params.get('erro') == 'estorno' %}
+    <p role="alert" class="form-card">Um lançamento pago não pode ser rebaixado de status. Use a ação “Registrar estorno” para criar a contrapartida financeira.</p>
+    {% elif request.query_params.get('erro') == 'estorno_existente' %}
+    <p role="alert" class="form-card">Este lançamento já possui estorno registrado. Não é possível registrar outro.</p>
+    {% elif request.query_params.get('erro') == 'estorno_indisponivel' %}
+    <p role="alert" class="form-card">Só é possível estornar um lançamento pago original. Verifique o status e se ele já foi estornado.</p>
+    {% endif %}
 
     <form method="GET" class="flex mb-4" style="gap:12px; flex-wrap:wrap;">
       <label>De <input type="date" name="inicio" value="{{ inicio }}" required></label>
@@ -121,6 +130,13 @@
           <td>{{ t.category }}<br><small class="text-muted">{{ t.description }}</small></td>
           <td>{{ t.payment_method or "—" }}</td>
           <td>{{ {"paid":"Pago/recebido","pending":"Pendente","cancelled":"Cancelado"}.get(t.status, t.status) }}
+            {% if t.reversal_of_id %}<br><small class="text-muted">Estorno do lançamento #{{ t.reversal_of_id }}</small>{% elif t.has_reversal %}<br><small class="text-muted">Estornado por lançamento vinculado</small>{% endif %}
+            {% if t.status == "paid" and not t.reversal_of_id and not t.has_reversal %}
+            <form method="POST" action="/admin/financeiro/estornar" style="margin-top:6px;">
+              <input type="hidden" name="transaction_id" value="{{ t.id }}">
+              <button class="btn btn-outline btn-sm" type="submit" onclick="return confirm('Registrar estorno de R$ {{ "%.2f"|format(t.amount_cents / 100) }}? O lançamento original será preservado e será criada uma contrapartida.');">Registrar estorno</button>
+            </form>
+            {% endif %}
             {% if t.status != "cancelled" %}
             <form method="POST" action="/admin/financeiro/confirmar" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;">
               <input type="hidden" name="transaction_id" value="{{ t.id }}">
