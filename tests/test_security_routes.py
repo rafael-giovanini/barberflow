@@ -65,6 +65,48 @@ class SecurityRouteTests(unittest.TestCase):
         response = self.client.get("/admin/clientes")
         self.assertEqual(response.status_code, 200)
 
+    def test_admin_customer_search_filters_by_name_email_and_phone(self):
+        self._login("admin@example.test")
+        for query, expected, unexpected in (
+            ("Cliente de Teste", "cliente@example.test", "outro@example.test"),
+            ("outro@example.test", "outro@example.test", "cliente@example.test"),
+        ):
+            with self.subTest(query=query):
+                response = self.client.get("/admin/clientes", params={"q": query})
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(expected, response.text)
+                self.assertNotIn(unexpected, response.text)
+
+    def test_admin_can_edit_customer_without_changing_role_or_password(self):
+        self._login("admin@example.test")
+        db = self.app_module.get_db()
+        before = db.execute(
+            "SELECT id, role, password_hash FROM users WHERE email=?",
+            ("cliente@example.test",),
+        ).fetchone()
+        db.close()
+
+        response = self.client.post("/admin/clientes/salvar", data={
+            "customer_id": before["id"],
+            "name": "Cliente Atualizado",
+            "email": "cliente.atualizado@example.test",
+            "phone": "18999998888",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/admin/clientes?salvo=1")
+
+        db = self.app_module.get_db()
+        after = db.execute(
+            "SELECT name, email, phone, role, password_hash FROM users WHERE id=?",
+            (before["id"],),
+        ).fetchone()
+        db.close()
+        self.assertEqual(after["name"], "Cliente Atualizado")
+        self.assertEqual(after["email"], "cliente.atualizado@example.test")
+        self.assertEqual(after["phone"], "18999998888")
+        self.assertEqual(after["role"], before["role"])
+        self.assertEqual(after["password_hash"], before["password_hash"])
+
     def test_customer_cannot_open_admin_customer_management(self):
         self._login("cliente@example.test")
         response = self.client.get("/admin/clientes")
