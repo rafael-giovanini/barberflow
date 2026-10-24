@@ -1160,6 +1160,38 @@ class SecurityRouteTests(unittest.TestCase):
         db.close()
         self.assertEqual(order["status"], "cancelled")
 
+    def test_cancelled_order_is_excluded_from_store_cost_and_margin_reports(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO products (name, price, cost_price, stock, category, active)
+            VALUES ('Produto cancelado relatório', 25.00, 8.00, 3, 'Teste', 1)
+        """)
+        product_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO orders (customer_name, customer_phone, address, total, status, payment_method)
+            VALUES ('Cliente Cancelado Relatório', '', '', 25.00, 'cancelled', 'pix')
+        """)
+        order_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO order_items (order_id, product_id, product_name, quantity, price)
+            VALUES (?, ?, 'Produto cancelado relatório', 1, 25.00)
+        """, (order_id, product_id))
+        db.execute("""
+            INSERT INTO stock_movements
+                (product_id, movement_type, quantity, unit_cost_cents, note, order_id)
+            VALUES (?, 'sale', -1, 800, 'Venda posteriormente cancelada', ?)
+        """, (product_id, order_id))
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        today = datetime.now().strftime("%Y-%m-%d")
+        response = self.client.get(f"/admin/financeiro?inicio={today}&fim={today}")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Custo estimado dos produtos vendidos", response.text)
+        self.assertNotIn("Produto cancelado relatório", response.text)
+        self.assertIn("R$ 0.00", response.text)
+
     def test_finance_csv_export_neutralizes_spreadsheet_formulas(self):
         db = self.app_module.get_db()
         db.execute("""
