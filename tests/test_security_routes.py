@@ -1016,6 +1016,40 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(appointment["status"], "completed")
         self.assertEqual(transaction["status"], "paid")
 
+    def test_barber_cannot_learn_paid_status_of_another_barbers_appointment(self):
+        db = self.app_module.get_db()
+        db.execute("INSERT INTO barbers (name, active) VALUES ('Outro barbeiro', 1)")
+        barber_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO services (name, price, duration_min, active)
+            VALUES ('Serviço reservado', 50.00, 30, 1)
+        """)
+        service_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO appointments
+                (user_id, barber_id, service_id, appointment_date, start_time, end_time,
+                 status, service_price_cents)
+            VALUES ((SELECT id FROM users WHERE email='cliente@example.test'),
+                    ?, ?, '2026-10-20', '10:00', '10:30', 'completed', 5000)
+        """, (barber_id, service_id))
+        appointment_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on,
+                 status, barber_id, appointment_id)
+            VALUES ('income', 'Serviços', 'Recebimento privado', 5000,
+                    '2026-10-20', 'paid', ?, ?)
+        """, (barber_id, appointment_id))
+        db.commit()
+        db.close()
+
+        self._login("barber@example.test")
+        response = self.client.post("/admin/agenda/status", json={
+            "appointment_id": appointment_id, "status": "cancelled"
+        })
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn("recebimento confirmado", response.text.lower())
+
     def test_recompleting_paid_appointment_preserves_confirmed_income(self):
         db = self.app_module.get_db()
         db.execute("INSERT INTO barbers (name, active) VALUES ('Barbeiro Pagamento', 1)")
