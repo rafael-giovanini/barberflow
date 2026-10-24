@@ -910,7 +910,10 @@ def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Option
             ORDER BY sales_cents DESC, p.name
         """, (inicio, fim)).fetchall()
         transactions = db.execute("""
-            SELECT t.*, b.name AS barber_name, u.name AS creator_name
+            SELECT t.*, b.name AS barber_name, u.name AS creator_name,
+                   EXISTS (
+                       SELECT 1 FROM financial_transactions r WHERE r.reversal_of_id=t.id
+                   ) AS has_reversal
             FROM financial_transactions t
             LEFT JOIN barbers b ON b.id=t.barber_id
             LEFT JOIN users u ON u.id=t.created_by
