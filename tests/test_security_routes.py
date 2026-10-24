@@ -1394,6 +1394,66 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(order["status"], "cancelled")
         self.assertEqual(income["status"], "cancelled")
 
+    def test_paid_order_can_be_cancelled_after_explicit_reversal_and_returns_stock(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO products (name, price, cost_price, stock, category, active)
+            VALUES ('Produto estorno pedido', 10.00, 4.00, 1, 'Teste', 1)
+        """)
+        product_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO orders (customer_name, customer_phone, address, total, status, payment_method)
+            VALUES ('Cliente Estorno Pedido', '', '', 10.00, 'paid', 'pix')
+        """)
+        order_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO stock_movements
+                (product_id, movement_type, quantity, unit_cost_cents, note, order_id)
+            VALUES (?, 'sale', -1, 400, 'Venda paga', ?)
+        """, (product_id, order_id))
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on,
+                 status, order_id)
+            VALUES ('income', 'Loja', 'Pedido pago para estorno', 1000, date('now'), 'paid', ?)
+        """, (order_id,))
+        transaction_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        reversal = self.client.post("/admin/financeiro/estornar", data={
+            "transaction_id": transaction_id
+        })
+        self.assertIn("salvo=estorno", reversal.headers["location"])
+        cancelled = self.client.post("/admin/pedidos/status", data={
+            "order_id": order_id, "status": "cancelled"
+        })
+        self.assertIn("salvo", cancelled.headers.get("location", ""))
+
+        db = self.app_module.get_db()
+        order = db.execute("SELECT status FROM orders WHERE id=?", (order_id,)).fetchone()
+        product = db.execute("SELECT stock FROM products WHERE id=?", (product_id,)).fetchone()
+        original = db.execute(
+            "SELECT status FROM financial_transactions WHERE id=?", (transaction_id,)
+        ).fetchone()
+        reversal_row = db.execute(
+            "SELECT transaction_type, status, amount_cents FROM financial_transactions "
+            "WHERE reversal_of_id=?", (transaction_id,)
+        ).fetchone()
+        return_count = db.execute(
+            "SELECT COUNT(*) FROM stock_movements WHERE order_id=? AND movement_type='return'",
+            (order_id,),
+        ).fetchone()[0]
+        db.close()
+        self.assertEqual(order["status"], "cancelled")
+        self.assertEqual(product["stock"], 2)
+        self.assertEqual(original["status"], "paid")
+        self.assertEqual(reversal_row["transaction_type"], "expense")
+        self.assertEqual(reversal_row["status"], "paid")
+        self.assertEqual(reversal_row["amount_cents"], 1000)
+        self.assertEqual(return_count, 1)
+
     def test_paid_order_cannot_be_cancelled_before_financial_reversal(self):
         db = self.app_module.get_db()
         db.execute("""
