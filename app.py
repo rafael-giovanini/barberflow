@@ -879,10 +879,14 @@ def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Option
               AND substr(m.created_at, 1, 10) BETWEEN ? AND ?
         """, (inicio, fim)).fetchone()
         store_revenue = db.execute("""
-            SELECT COALESCE(SUM(amount_cents), 0) AS income_cents
-            FROM financial_transactions
-            WHERE transaction_type='income' AND status='paid' AND order_id IS NOT NULL
-              AND occurred_on BETWEEN ? AND ?
+            SELECT COALESCE(SUM(t.amount_cents), 0) AS income_cents
+            FROM financial_transactions t
+            JOIN orders o ON o.id=t.order_id AND o.status='paid'
+            WHERE t.transaction_type='income' AND t.status='paid' AND t.order_id IS NOT NULL
+              AND t.occurred_on BETWEEN ? AND ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM financial_transactions r WHERE r.reversal_of_id=t.id
+              )
         """, (inicio, fim)).fetchone()
         # Relatório de rentabilidade considera apenas pedidos pagos. Os itens são
         # agregados antes do JOIN para evitar duplicação de valores em pedidos com
