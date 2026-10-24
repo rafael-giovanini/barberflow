@@ -989,6 +989,48 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(appointment["status"], "completed")
         self.assertEqual(transaction["status"], "paid")
 
+    def test_recompleting_paid_appointment_preserves_confirmed_income(self):
+        db = self.app_module.get_db()
+        db.execute("INSERT INTO barbers (name, active) VALUES ('Barbeiro Pagamento', 1)")
+        barber_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO services (name, price, duration_min, active)
+            VALUES ('Corte pago', 45.50, 30, 1)
+        """)
+        service_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO appointments
+                (user_id, barber_id, service_id, appointment_date, start_time, end_time,
+                 status, service_price_cents)
+            VALUES ((SELECT id FROM users WHERE email='cliente@example.test'),
+                    ?, ?, '2026-10-20', '10:00', '10:30', 'completed', 4550)
+        """, (barber_id, service_id))
+        appointment_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on,
+                 status, barber_id, appointment_id)
+            VALUES ('income', 'Serviços', 'Recebimento confirmado', 4550,
+                    '2026-10-20', 'paid', ?, ?)
+        """, (barber_id, appointment_id))
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        response = self.client.post("/admin/agenda/status", json={
+            "appointment_id": appointment_id, "status": "completed"
+        })
+        self.assertEqual(response.status_code, 200)
+
+        db = self.app_module.get_db()
+        row = db.execute("""
+            SELECT status, amount_cents FROM financial_transactions
+            WHERE appointment_id=?
+        """, (appointment_id,)).fetchone()
+        db.close()
+        self.assertEqual(row["status"], "paid")
+        self.assertEqual(row["amount_cents"], 4550)
+
     def test_paid_store_order_creates_one_financial_income(self):
         db = self.app_module.get_db()
         db.execute("""
