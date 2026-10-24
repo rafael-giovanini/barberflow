@@ -230,7 +230,7 @@ class SecurityRouteTests(unittest.TestCase):
             "confirm_password": "curta",
         })
         self.assertEqual(invalid.status_code, 200)
-        self.assertIn("A senha deve ter pelo menos 8 caracteres.", invalid.text)
+        self.assertIn("Use uma senha com pelo menos 8 caracteres e confirme-a corretamente.", invalid.text)
 
         db = self.app_module.get_db()
         token = db.execute(
