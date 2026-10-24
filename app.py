@@ -1170,6 +1170,26 @@ async def admin_agenda_status(request: Request):
         return JSONResponse({"ok": False, "error": "Status inválido."}, status_code=400)
     db = get_db()
     try:
+        # Um recebimento confirmado não pode ser apagado implicitamente ao cancelar
+        # ou reabrir o atendimento. Primeiro é necessário registrar o estorno no financeiro.
+        paid_income = db.execute("""
+            SELECT id FROM financial_transactions
+            WHERE appointment_id=? AND transaction_type='income' AND status='paid'
+            LIMIT 1
+        """, (appointment_id,)).fetchone()
+        current_appointment = db.execute(
+            "SELECT status FROM appointments WHERE id=?", (appointment_id,)
+        ).fetchone()
+        if (current_appointment and paid_income
+                and status != current_appointment["status"]
+                and status != "completed"):
+            db.rollback()
+            return JSONResponse({
+                "ok": False,
+                "error": "Este atendimento possui recebimento confirmado. Registre o estorno no financeiro antes de alterar seu status.",
+                "code": "recebimento_confirmado",
+            }, status_code=409)
+
         # Barbeiros só podem alterar agendamentos vinculados à própria agenda.
         if user.get("role") == "barber":
             updated = db.execute("""
