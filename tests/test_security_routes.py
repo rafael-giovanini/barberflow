@@ -1630,8 +1630,8 @@ class SecurityRouteTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn("Estorno do lançamento;Possui estorno", response.text)
-        self.assertIn(f";{original_id};Sim", response.text)
-        self.assertIn(f";{original_id};Não", response.text)
+        self.assertIn(f";Recebimento original CSV;25.00;;paid;;;;Sim", response.text)
+        self.assertIn(f";Estorno do lançamento CSV;25.00;;paid;;;{original_id};Não", response.text)
 
     def test_finance_csv_export_rejects_invalid_or_oversized_period(self):
         self._login("admin@example.test")
