@@ -1160,6 +1160,39 @@ class SecurityRouteTests(unittest.TestCase):
         db.close()
         self.assertEqual(order["status"], "cancelled")
 
+    def test_finance_csv_export_neutralizes_spreadsheet_formulas(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on, status)
+            VALUES ('expense', '=1+1', '  @SUM(A1:A2)', 500, date('now'), 'paid')
+        """)
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        today = datetime.now().strftime("%Y-%m-%d")
+        response = self.client.get(
+            f"/admin/financeiro/exportar.csv?inicio={today}&fim={today}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("'=1+1", response.text)
+        self.assertIn("'  @SUM(A1:A2)", response.text)
+
+    def test_finance_csv_export_rejects_invalid_or_oversized_period(self):
+        self._login("admin@example.test")
+        response = self.client.get(
+            "/admin/financeiro/exportar.csv?inicio=2024-01-01&fim=2026-10-23"
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("erro=periodo", response.headers["location"])
+
+        response = self.client.get(
+            "/admin/financeiro/exportar.csv?inicio=2026-02-30&fim=2026-03-01"
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("erro=periodo", response.headers["location"])
+
     def test_finance_csv_export_requires_admin(self):
         response = self.client.get("/admin/financeiro/exportar.csv")
         self.assertEqual(response.status_code, 303)
