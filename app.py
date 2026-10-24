@@ -1236,6 +1236,7 @@ async def admin_agenda_status(request: Request):
                     ON CONFLICT(appointment_id) WHERE appointment_id IS NOT NULL
                     DO UPDATE SET status='pending', amount_cents=excluded.amount_cents,
                                   barber_id=excluded.barber_id
+                    WHERE financial_transactions.status != 'paid'
                 """, (
                     f"Atendimento concluído #{appointment_id}", price_cents,
                     appointment["barber_id"], appointment_id, user["user_id"],
