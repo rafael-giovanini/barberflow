@@ -1016,6 +1016,112 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(appointment["status"], "completed")
         self.assertEqual(transaction["status"], "paid")
 
+    def test_finance_reversal_preserves_original_and_prevents_duplicates(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on,
+                 payment_method, status)
+            VALUES ('income', 'Serviços', 'Recebimento para estorno', 4550,
+                    '2026-10-20', 'Pix', 'paid')
+        """)
+        original_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        first = self.client.post("/admin/financeiro/estornar", data={
+            "transaction_id": original_id
+        })
+        self.assertEqual(first.status_code, 303)
+        self.assertIn("salvo=estorno", first.headers["location"])
+
+        db = self.app_module.get_db()
+        original = db.execute(
+            "SELECT status, amount_cents FROM financial_transactions WHERE id=?",
+            (original_id,),
+        ).fetchone()
+        reversal = db.execute(
+            "SELECT transaction_type, status, amount_cents, reversal_of_id "
+            "FROM financial_transactions WHERE reversal_of_id=?",
+            (original_id,),
+        ).fetchone()
+        db.close()
+        self.assertEqual(original["status"], "paid")
+        self.assertEqual(original["amount_cents"], 4550)
+        self.assertIsNotNone(reversal)
+        self.assertEqual(reversal["transaction_type"], "expense")
+        self.assertEqual(reversal["status"], "paid")
+        self.assertEqual(reversal["amount_cents"], 4550)
+        self.assertEqual(reversal["reversal_of_id"], original_id)
+
+        second = self.client.post("/admin/financeiro/estornar", data={
+            "transaction_id": original_id
+        })
+        self.assertEqual(second.status_code, 303)
+        self.assertIn("erro=estorno_existente", second.headers["location"])
+        db = self.app_module.get_db()
+        count = db.execute(
+            "SELECT COUNT(*) FROM financial_transactions WHERE reversal_of_id=?",
+            (original_id,),
+        ).fetchone()[0]
+        db.close()
+        self.assertEqual(count, 1)
+
+    def test_cancelled_appointment_after_reversal_preserves_paid_original_income(self):
+        db = self.app_module.get_db()
+        db.execute("INSERT INTO barbers (name, active) VALUES ('Barbeiro Estornado', 1)")
+        barber_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO services (name, price, duration_min, active)
+            VALUES ('Corte estornado', 45.50, 30, 1)
+        """)
+        service_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO appointments
+                (user_id, barber_id, service_id, appointment_date, start_time, end_time,
+                 status, service_price_cents)
+            VALUES ((SELECT id FROM users WHERE email='cliente@example.test'),
+                    ?, ?, '2026-10-20', '10:00', '10:30', 'completed', 4550)
+        """, (barber_id, service_id))
+        appointment_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on,
+                 status, barber_id, appointment_id)
+            VALUES ('income', 'Serviços', 'Recebimento atendimento estornado', 4550,
+                    '2026-10-20', 'paid', ?, ?)
+        """, (barber_id, appointment_id))
+        original_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        reversal_response = self.client.post("/admin/financeiro/estornar", data={
+            "transaction_id": original_id
+        })
+        self.assertEqual(reversal_response.status_code, 303)
+        response = self.client.post("/admin/agenda/status", json={
+            "appointment_id": appointment_id, "status": "cancelled"
+        })
+        self.assertEqual(response.status_code, 200)
+
+        db = self.app_module.get_db()
+        appointment = db.execute(
+            "SELECT status FROM appointments WHERE id=?", (appointment_id,)
+        ).fetchone()
+        original = db.execute(
+            "SELECT status FROM financial_transactions WHERE id=?", (original_id,)
+        ).fetchone()
+        pending_count = db.execute("""
+            SELECT COUNT(*) FROM financial_transactions
+            WHERE appointment_id=? AND status='pending'
+        """, (appointment_id,)).fetchone()[0]
+        db.close()
+        self.assertEqual(appointment["status"], "cancelled")
+        self.assertEqual(original["status"], "paid")
+        self.assertEqual(pending_count, 0)
+
     def test_barber_cannot_learn_paid_status_of_another_barbers_appointment(self):
         db = self.app_module.get_db()
         db.execute("INSERT INTO barbers (name, active) VALUES ('Outro barbeiro', 1)")
