@@ -1599,6 +1599,32 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertIn("'=1+1", response.text)
         self.assertIn("'  @SUM(A1:A2)", response.text)
 
+    def test_finance_csv_export_includes_reversal_audit_links(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on, status)
+            VALUES ('income', 'Serviços', 'Recebimento original CSV', 2500, date('now'), 'paid')
+        """)
+        original_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on, status, reversal_of_id)
+            VALUES ('expense', 'Estorno', 'Estorno do lançamento CSV', 2500, date('now'), 'paid', ?)
+        """, (original_id,))
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        today = datetime.now().strftime("%Y-%m-%d")
+        response = self.client.get(
+            f"/admin/financeiro/exportar.csv?inicio={today}&fim={today}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Estorno do lançamento;Possui estorno", response.text)
+        self.assertIn(f";{original_id};Sim", response.text)
+        self.assertIn(f";{original_id};Não", response.text)
+
     def test_finance_csv_export_rejects_invalid_or_oversized_period(self):
         self._login("admin@example.test")
         response = self.client.get(
