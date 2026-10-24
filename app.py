@@ -1012,7 +1012,7 @@ def admin_financeiro_exportar(request: Request, inicio: Optional[str] = None, fi
         ])
     filename = f"barberflow-financeiro-{inicio}-a-{fim}.csv"
     return Response(
-        content="\\ufeff" + output.getvalue(),
+        content="\ufeff" + output.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"',
                  "Cache-Control": "no-store"},
@@ -1483,6 +1483,43 @@ def admin_pedidos_status(request: Request, order_id: int = Form(...), status: st
         order = db.execute("SELECT id, total, payment_method, status FROM orders WHERE id=?", (order_id,)).fetchone()
         if not order:
             return RedirectResponse(url="/admin/pedidos?erro=pedido", status_code=303)
+        current_status = order["status"]
+        # Pedido cancelado é terminal: evita reativação sem nova reserva de estoque.
+        if current_status == "cancelled" and status != "cancelled":
+            db.rollback()
+            return RedirectResponse(url="/admin/pedidos?erro=cancelado", status_code=303)
+
+        if status == "cancelled" and current_status != "cancelled":
+            # Devolve cada saída de estoque do pedido uma única vez. O movimento
+            # de retorno e a atualização do saldo compartilham a transação.
+            sales = db.execute("""
+                SELECT product_id, SUM(-quantity) AS quantity,
+                       MAX(unit_cost_cents) AS unit_cost_cents
+                FROM stock_movements
+                WHERE order_id=? AND movement_type='sale' AND quantity < 0
+                GROUP BY product_id
+            """, (order_id,)).fetchall()
+            for sale in sales:
+                already_returned = db.execute("""
+                    SELECT 1 FROM stock_movements
+                    WHERE order_id=? AND product_id=? AND movement_type='return'
+                    LIMIT 1
+                """, (order_id, sale["product_id"])).fetchone()
+                if already_returned:
+                    continue
+                quantity = int(sale["quantity"] or 0)
+                if quantity <= 0:
+                    continue
+                db.execute("UPDATE products SET stock=stock+? WHERE id=?",
+                           (quantity, sale["product_id"]))
+                db.execute("""
+                    INSERT INTO stock_movements
+                        (product_id, movement_type, quantity, unit_cost_cents, note,
+                         order_id, created_by)
+                    VALUES (?, 'return', ?, ?, ?, ?, ?)
+                """, (sale["product_id"], quantity, int(sale["unit_cost_cents"] or 0),
+                      f"Devolução por cancelamento do pedido #{order_id}", order_id, user["user_id"]))
+
         db.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
         if status == "paid":
             amount_cents = int(round(float(order["total"]) * 100))
