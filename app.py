@@ -1599,6 +1599,20 @@ def admin_pedidos_status(request: Request, order_id: int = Form(...), status: st
             db.rollback()
             return RedirectResponse(url="/admin/pedidos?erro=cancelado", status_code=303)
 
+        # Cancelar pedido pago exige contrapartida de estorno previamente registrada.
+        if status == "cancelled" and current_status != "cancelled":
+            paid_order_income = db.execute("""
+                SELECT t.id FROM financial_transactions t
+                WHERE t.order_id=? AND t.transaction_type='income' AND t.status='paid'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM financial_transactions r WHERE r.reversal_of_id=t.id
+                  )
+                LIMIT 1
+            """, (order_id,)).fetchone()
+            if paid_order_income:
+                db.rollback()
+                return RedirectResponse(url="/admin/pedidos?erro=estorno", status_code=303)
+
         if status == "cancelled" and current_status != "cancelled":
             # Devolve cada saída de estoque do pedido uma única vez. O movimento
             # de retorno e a atualização do saldo compartilham a transação.
@@ -1646,9 +1660,11 @@ def admin_pedidos_status(request: Request, order_id: int = Form(...), status: st
                               payment_method=excluded.payment_method, status='paid'
             """, (f"Pedido da loja #{order_id}", amount_cents, order["payment_method"], order_id, user["user_id"]))
         else:
+            # Não rebaixa lançamentos pagos: após estorno, a receita original e a
+            # contrapartida permanecem auditáveis; somente pendências são canceladas.
             db.execute("""
                 UPDATE financial_transactions SET status='cancelled'
-                WHERE order_id=? AND transaction_type='income'
+                WHERE order_id=? AND transaction_type='income' AND status='pending'
             """, (order_id,))
         db.commit()
     finally:
