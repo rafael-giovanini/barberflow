@@ -985,7 +985,10 @@ def admin_financeiro_exportar(request: Request, inicio: Optional[str] = None, fi
     try:
         rows = db.execute("""
             SELECT t.occurred_on, t.transaction_type, t.category, t.description,
-                   t.amount_cents, t.payment_method, t.status,
+                   t.amount_cents, t.payment_method, t.status, t.reversal_of_id,
+                   EXISTS (
+                       SELECT 1 FROM financial_transactions r WHERE r.reversal_of_id=t.id
+                   ) AS has_reversal,
                    b.name AS barber_name, u.name AS creator_name
             FROM financial_transactions t
             LEFT JOIN barbers b ON b.id=t.barber_id
@@ -999,7 +1002,8 @@ def admin_financeiro_exportar(request: Request, inicio: Optional[str] = None, fi
     output = io.StringIO(newline="")
     writer = csv.writer(output, delimiter=";", lineterminator="\r\n")
     writer.writerow(["Data", "Tipo", "Categoria", "Descrição", "Valor (R$)",
-                     "Forma de pagamento", "Status", "Barbeiro", "Registrado por"])
+                     "Forma de pagamento", "Status", "Barbeiro", "Registrado por",
+                     "Estorno do lançamento", "Possui estorno"])
     for row in rows:
         # Evita que campos textuais iniciados por caracteres de fórmula sejam
         # interpretados como fórmulas por planilhas ao abrir o CSV.
@@ -1014,6 +1018,7 @@ def admin_financeiro_exportar(request: Request, inicio: Optional[str] = None, fi
             "Entrada" if row["transaction_type"] == "income" else "Despesa",
             values[0], values[1], f'{row["amount_cents"] / 100:.2f}',
             values[2], row["status"], values[3], values[4],
+            row["reversal_of_id"] or "", "Sim" if row["has_reversal"] else "Não",
         ])
     filename = f"barberflow-financeiro-{inicio}-a-{fim}.csv"
     return Response(
