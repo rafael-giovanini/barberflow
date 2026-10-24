@@ -858,6 +858,33 @@ class SecurityRouteTests(unittest.TestCase):
         db.close()
         self.assertIsNone(row)
 
+    def test_confirmed_financial_transaction_cannot_be_cancelled_without_reversal(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on,
+                 status, created_by)
+            VALUES ('income', 'Serviços', 'Receita confirmada teste', 4550,
+                    date('now'), 'paid', (SELECT id FROM users WHERE email='admin@example.test'))
+        """)
+        transaction_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        response = self.client.post("/admin/financeiro/confirmar", data={
+            "transaction_id": transaction_id, "status": "cancelled"
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("erro=estorno", response.headers["location"])
+
+        db = self.app_module.get_db()
+        row = db.execute(
+            "SELECT status FROM financial_transactions WHERE id=?", (transaction_id,)
+        ).fetchone()
+        db.close()
+        self.assertEqual(row["status"], "paid")
+
     def test_commission_rate_is_admin_only_and_validated(self):
         db = self.app_module.get_db()
         db.execute("INSERT INTO barbers (name, active) VALUES (?, 1)", ("Barbeiro financeiro",))
