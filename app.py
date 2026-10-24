@@ -1144,6 +1144,55 @@ def admin_financeiro_confirmar(request: Request, transaction_id: int = Form(...)
     return RedirectResponse(url="/admin/financeiro?salvo=status", status_code=303)
 
 
+
+@app.post("/admin/financeiro/estornar")
+def admin_financeiro_estornar(request: Request, transaction_id: int = Form(...)):
+    """Registra contrapartida de estorno sem apagar o lançamento original."""
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+
+    db = get_db()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        original = db.execute("""
+            SELECT id, transaction_type, category, description, amount_cents,
+                   payment_method, occurred_on, status, reversal_of_id
+            FROM financial_transactions
+            WHERE id=?
+        """, (transaction_id,)).fetchone()
+        if not original or original["status"] != "paid" or original["reversal_of_id"] is not None:
+            db.rollback()
+            return RedirectResponse(url="/admin/financeiro?erro=estorno_indisponivel", status_code=303)
+
+        existing = db.execute(
+            "SELECT id FROM financial_transactions WHERE reversal_of_id=?",
+            (transaction_id,),
+        ).fetchone()
+        if existing:
+            db.rollback()
+            return RedirectResponse(url="/admin/financeiro?erro=estorno_existente", status_code=303)
+
+        reversal_type = "expense" if original["transaction_type"] == "income" else "income"
+        reversal_description = f"Estorno do lançamento #{original['id']}: {original['description']}"
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on,
+                 payment_method, status, created_by, reversal_of_id)
+            VALUES (?, 'Estorno', ?, ?, date('now', 'localtime'), ?, 'paid', ?, ?)
+        """, (
+            reversal_type, reversal_description[:240], original["amount_cents"],
+            original["payment_method"], user["user_id"], transaction_id,
+        ))
+        db.commit()
+    except sqlite3.IntegrityError:
+        db.rollback()
+        return RedirectResponse(url="/admin/financeiro?erro=estorno_existente", status_code=303)
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/financeiro?salvo=estorno", status_code=303)
+
+
 @app.get("/admin/agenda", response_class=HTMLResponse)
 def admin_agenda(request: Request, date: Optional[str] = None):
     user = get_current_user(request)
@@ -1203,8 +1252,11 @@ async def admin_agenda_status(request: Request):
         # Um recebimento confirmado não pode ser apagado implicitamente ao cancelar
         # ou reabrir o atendimento. Primeiro é necessário registrar o estorno no financeiro.
         paid_income = db.execute("""
-            SELECT id FROM financial_transactions
-            WHERE appointment_id=? AND transaction_type='income' AND status='paid'
+            SELECT t.id FROM financial_transactions t
+            WHERE t.appointment_id=? AND t.transaction_type='income' AND t.status='paid'
+              AND NOT EXISTS (
+                  SELECT 1 FROM financial_transactions r WHERE r.reversal_of_id=t.id
+              )
             LIMIT 1
         """, (appointment_id,)).fetchone()
         current_appointment = db.execute(
@@ -1273,9 +1325,11 @@ async def admin_agenda_status(request: Request):
                 ))
         else:
             # Se o atendimento for reaberto ou cancelado, não o mantém como receita paga.
+            # Só cancela receita ainda pendente. Recebimentos pagos são preservados
+            # no histórico e, quando estornados, ficam compensados por lançamento próprio.
             db.execute("""
                 UPDATE financial_transactions SET status='cancelled'
-                WHERE appointment_id=? AND transaction_type='income'
+                WHERE appointment_id=? AND transaction_type='income' AND status='pending'
             """, (appointment_id,))
         db.commit()
     finally:
