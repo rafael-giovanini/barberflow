@@ -904,6 +904,12 @@ class SecurityRouteTests(unittest.TestCase):
             "barber_id": barber_id, "commission_percent": "150"
         })
         self.assertIn("erro=comissao", invalid.headers["location"])
+        for non_finite in ("NaN", "Infinity", "-Infinity"):
+            invalid_non_finite = self.client.post("/admin/financeiro/comissao", data={
+                "barber_id": barber_id, "commission_percent": non_finite
+            })
+            self.assertIn("erro=comissao", invalid_non_finite.headers["location"])
+
         valid = self.client.post("/admin/financeiro/comissao", data={
             "barber_id": barber_id, "commission_percent": "40,5"
         })
