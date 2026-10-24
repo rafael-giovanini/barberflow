@@ -873,7 +873,9 @@ def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Option
         stock_costs = db.execute("""
             SELECT COALESCE(SUM(ABS(m.quantity) * m.unit_cost_cents), 0) AS cogs_cents
             FROM stock_movements m
+            LEFT JOIN orders o ON o.id=m.order_id
             WHERE m.movement_type='sale'
+              AND (m.order_id IS NULL OR o.status='paid')
               AND substr(m.created_at, 1, 10) BETWEEN ? AND ?
         """, (inicio, fim)).fetchone()
         store_revenue = db.execute("""
