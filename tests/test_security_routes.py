@@ -1365,7 +1365,7 @@ class SecurityRouteTests(unittest.TestCase):
         db.execute("""
             INSERT INTO financial_transactions
                 (transaction_type, category, description, amount_cents, occurred_on, status, order_id)
-            VALUES ('income', 'Loja', 'Pedido cancelamento', 2000, date('now'), 'paid', ?)
+            VALUES ('income', 'Loja', 'Pedido cancelamento', 2000, date('now'), 'pending', ?)
         """, (order_id,))
         db.commit()
         db.close()
@@ -1393,6 +1393,55 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(returns["quantity"], 2)
         self.assertEqual(order["status"], "cancelled")
         self.assertEqual(income["status"], "cancelled")
+
+    def test_paid_order_cannot_be_cancelled_before_financial_reversal(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO products (name, price, cost_price, stock, category, active)
+            VALUES ('Produto pedido pago', 10.00, 4.00, 1, 'Teste', 1)
+        """)
+        product_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO orders (customer_name, customer_phone, address, total, status, payment_method)
+            VALUES ('Cliente Pedido Pago', '', '', 10.00, 'paid', 'pix')
+        """)
+        order_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO stock_movements
+                (product_id, movement_type, quantity, unit_cost_cents, note, order_id)
+            VALUES (?, 'sale', -1, 400, 'Venda paga', ?)
+        """, (product_id, order_id))
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on,
+                 status, order_id)
+            VALUES ('income', 'Loja', 'Pedido pago', 1000, date('now'), 'paid', ?)
+        """, (order_id,))
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        response = self.client.post("/admin/pedidos/status", data={
+            "order_id": order_id, "status": "cancelled"
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("erro=estorno", response.headers["location"])
+
+        db = self.app_module.get_db()
+        order = db.execute("SELECT status FROM orders WHERE id=?", (order_id,)).fetchone()
+        product = db.execute("SELECT stock FROM products WHERE id=?", (product_id,)).fetchone()
+        income = db.execute(
+            "SELECT status FROM financial_transactions WHERE order_id=?", (order_id,)
+        ).fetchone()
+        returns = db.execute(
+            "SELECT COUNT(*) FROM stock_movements WHERE order_id=? AND movement_type='return'",
+            (order_id,),
+        ).fetchone()[0]
+        db.close()
+        self.assertEqual(order["status"], "paid")
+        self.assertEqual(product["stock"], 1)
+        self.assertEqual(income["status"], "paid")
+        self.assertEqual(returns, 0)
 
     def test_cancelled_order_cannot_be_reopened_without_restocking(self):
         db = self.app_module.get_db()
