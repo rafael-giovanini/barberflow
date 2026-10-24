@@ -18,6 +18,11 @@
 
   <div class="admin-content">
     <h1>Pedidos da Loja Online</h1>
+    {% if request.query_params.get('erro') == 'estorno' %}
+    <p role="alert" class="form-card">Este pedido já foi pago. Registre o estorno no Financeiro antes de cancelar o pedido; o estoque só será devolvido após essa confirmação.</p>
+    {% elif request.query_params.get('erro') == 'cancelado' %}
+    <p role="alert" class="form-card">Um pedido cancelado não pode ser reaberto automaticamente. Verifique o estoque antes de criar um novo pedido.</p>
+    {% endif %}
 
     {% if not orders %}
     <p class="text-muted">Nenhum pedido ainda.</p>
