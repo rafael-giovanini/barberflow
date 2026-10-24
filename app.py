@@ -1121,6 +1121,16 @@ def admin_financeiro_confirmar(request: Request, transaction_id: int = Form(...)
         return RedirectResponse(url="/admin/financeiro?erro=status", status_code=303)
     db = get_db()
     try:
+        current = db.execute(
+            "SELECT status FROM financial_transactions WHERE id=?",
+            (transaction_id,),
+        ).fetchone()
+        if not current or current["status"] == "cancelled":
+            db.rollback()
+            return RedirectResponse(url="/admin/financeiro?erro=lancamento", status_code=303)
+        if current["status"] == "paid" and status != "paid":
+            db.rollback()
+            return RedirectResponse(url="/admin/financeiro?erro=estorno", status_code=303)
         result = db.execute(
             "UPDATE financial_transactions SET status=? WHERE id=? AND status != 'cancelled'",
             (status, transaction_id),
