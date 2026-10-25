@@ -264,10 +264,10 @@ def cadastro(request: Request, name: str = Form(...), email: str = Form(...),
     name = name.strip()
     email = email.strip().lower()
     phone = phone.strip()
-    if not name or "@" not in email or len(password) < 8:
+    if not name or "@" not in email or len(password) < 10:
         return templates.TemplateResponse("cadastro.html", {
             "request": request, "user": None,
-            "error": "Informe nome e e-mail válidos e uma senha com pelo menos 8 caracteres."
+            "error": "Informe nome e e-mail válidos e uma senha com pelo menos 10 caracteres."
         })
     db = get_db()
     existing = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
@@ -1756,7 +1756,7 @@ async def admin_barbeiro_salvar(request: Request):
     if email and ("@" not in email or len(email) > 254):
         db.close()
         return RedirectResponse(url="/admin/barbeiros?erro=email", status_code=303)
-    if password and len(password) < 8:
+    if password and len(password) < 10:
         db.close()
         return RedirectResponse(url="/admin/barbeiros?erro=senha", status_code=303)
 
