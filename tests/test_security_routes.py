@@ -1833,3 +1833,69 @@ class SecurityRouteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_public_registration_rejects_password_shorter_than_10(self):
+        response = self.client.post("/cadastro", data={
+            "name": "Cadastro com senha curta",
+            "email": "senha.curta@example.test",
+            "phone": "",
+            "password": "Curta123",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("senha com pelo menos 10 caracteres", response.text.lower())
+
+        db = self.app_module.get_db()
+        row = db.execute(
+            "SELECT id FROM users WHERE email=?",
+            ("senha.curta@example.test",),
+        ).fetchone()
+        db.close()
+        self.assertIsNone(row)
+
+    def test_password_change_rejects_short_password_without_mutating_account(self):
+        self._login("cliente@example.test")
+        db = self.app_module.get_db()
+        before = db.execute(
+            "SELECT id, password_hash FROM users WHERE email=?",
+            ("cliente@example.test",),
+        ).fetchone()
+        db.close()
+
+        response = self.client.post("/minha-conta/senha", data={
+            "current_password": "SenhaTeste-123",
+            "new_password": "Curta123",
+            "confirm_password": "Curta123",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("pelo menos 10 caracteres", response.text)
+
+        db = self.app_module.get_db()
+        after = db.execute(
+            "SELECT password_hash, session_version FROM users WHERE id=?",
+            (before["id"],),
+        ).fetchone()
+        db.close()
+        self.assertEqual(after["password_hash"], before["password_hash"])
+        self.assertEqual(after["session_version"], 0)
+        self.assertEqual(self.client.get("/minha-conta").status_code, 200)
+
+    def test_staff_customer_creation_rejects_password_shorter_than_10(self):
+        self._login("admin@example.test")
+        response = self.client.post("/admin/clientes/novo", data={
+            "name": "Cliente com senha curta",
+            "email": "cliente.senha.curta@example.test",
+            "phone": "",
+            "password": "Curta123",
+            "confirm_password": "Curta123",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("pelo menos 10 caracteres", response.text)
+
+        db = self.app_module.get_db()
+        row = db.execute(
+            "SELECT id FROM users WHERE email=?",
+            ("cliente.senha.curta@example.test",),
+        ).fetchone()
+        db.close()
+        self.assertIsNone(row)
