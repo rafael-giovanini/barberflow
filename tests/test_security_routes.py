@@ -1899,3 +1899,31 @@ if __name__ == "__main__":
         ).fetchone()
         db.close()
         self.assertIsNone(row)
+
+
+    def test_cross_origin_post_is_rejected_by_security_middleware(self):
+        response = self.client.post(
+            "/login",
+            data={"email": "cliente@example.test", "password": "SenhaTeste-123"},
+            headers={"Origin": "https://evil.example"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Origem da requisição não permitida.", response.text)
+        self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(response.headers.get("X-Frame-Options"), "DENY")
+        self.assertEqual(response.headers.get("Cache-Control"), "no-store")
+
+    def test_security_headers_are_present_on_regular_responses(self):
+        response = self.client.get("/login")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(response.headers.get("X-Frame-Options"), "DENY")
+        self.assertEqual(
+            response.headers.get("Referrer-Policy"),
+            "strict-origin-when-cross-origin",
+        )
+        self.assertEqual(
+            response.headers.get("Permissions-Policy"),
+            "camera=(), microphone=(), geolocation=()",
+        )
+        self.assertEqual(response.headers.get("Cache-Control"), "no-store")
