@@ -273,7 +273,7 @@ class SecurityRouteTests(unittest.TestCase):
             "confirm_password": "curta",
         })
         self.assertEqual(invalid.status_code, 200)
-        self.assertIn("Use uma senha com pelo menos 8 caracteres e confirme-a corretamente.", invalid.text)
+        self.assertIn("Use uma senha com pelo menos 10 caracteres e confirme-a corretamente.", invalid.text)
 
         db = self.app_module.get_db()
         token = db.execute(
@@ -536,7 +536,7 @@ class SecurityRouteTests(unittest.TestCase):
     def test_new_customer_rejects_short_or_mismatched_password(self):
         self._login("admin@example.test")
         cases = [
-            ("short", "short", "A senha deve ter pelo menos 8 caracteres."),
+            ("short", "short", "A senha deve ter pelo menos 10 caracteres."),
             ("SenhaNova-456", "diferente", "A confirmação da senha não confere."),
         ]
         for index, (password, confirmation, message) in enumerate(cases):
