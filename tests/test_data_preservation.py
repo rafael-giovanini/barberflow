@@ -13,6 +13,8 @@ class ExistingDataPreservationTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.original_db_path = database.DB_PATH
+        self.original_admin_email = os.environ.get("INITIAL_ADMIN_EMAIL")
+        self.original_admin_password = os.environ.get("INITIAL_ADMIN_PASSWORD")
         database.DB_PATH = os.path.join(self.temp_dir.name, "barberflow-preservation.db")
         os.environ.pop("INITIAL_ADMIN_EMAIL", None)
         os.environ.pop("INITIAL_ADMIN_PASSWORD", None)
@@ -65,6 +67,14 @@ class ExistingDataPreservationTests(unittest.TestCase):
 
     def tearDown(self):
         database.DB_PATH = self.original_db_path
+        for key, value in (
+            ("INITIAL_ADMIN_EMAIL", self.original_admin_email),
+            ("INITIAL_ADMIN_PASSWORD", self.original_admin_password),
+        ):
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         self.temp_dir.cleanup()
 
     def test_database_initialization_preserves_existing_appointments_and_orders(self):
