@@ -154,6 +154,49 @@ class SecurityRouteTests(unittest.TestCase):
         good_login = self._login("cliente@example.test", "SenhaTeste-123")
         self.assertEqual(good_login.status_code, 303)
 
+    def test_admin_deactivation_preserves_customer_record_and_revokes_session(self):
+        customer_login = self._login("cliente@example.test")
+        self.assertEqual(customer_login.status_code, 303)
+
+        db = self.app_module.get_db()
+        customer = db.execute(
+            "SELECT id, name, email, role FROM users WHERE email=?",
+            ("cliente@example.test",),
+        ).fetchone()
+        db.close()
+
+        admin_client = TestClient(self.app_module.app, follow_redirects=False)
+        try:
+            admin_login = admin_client.post(
+                "/login", data={"email": "admin@example.test", "password": "SenhaTeste-123"}
+            )
+            self.assertEqual(admin_login.status_code, 303)
+            response = admin_client.post("/admin/clientes/status", data={
+                "customer_id": customer["id"],
+                "active": 0,
+            })
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], "/admin/clientes")
+
+            # A desativação deve invalidar sessões existentes sem apagar o cadastro.
+            account_page = self.client.get("/minha-conta")
+            self.assertEqual(account_page.status_code, 303)
+            self.assertEqual(account_page.headers["location"], "/login")
+
+            db = self.app_module.get_db()
+            after = db.execute(
+                "SELECT name, email, role, active FROM users WHERE id=?",
+                (customer["id"],),
+            ).fetchone()
+            db.close()
+            self.assertIsNotNone(after)
+            self.assertEqual(after["name"], customer["name"])
+            self.assertEqual(after["email"], customer["email"])
+            self.assertEqual(after["role"], "customer")
+            self.assertEqual(after["active"], 0)
+        finally:
+            admin_client.close()
+
     def test_disabled_user_cannot_login(self):
         db = self.app_module.get_db()
         db.execute("UPDATE users SET active=0 WHERE email=?", ("cliente@example.test",))
