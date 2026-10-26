@@ -1830,7 +1830,7 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertIn("12.50", response.text)
         self.assertTrue(response.content.startswith(bytes([0xEF, 0xBB, 0xBF])))
 
-def test_public_registration_rejects_password_shorter_than_10(self):
+    def test_public_registration_rejects_password_shorter_than_10(self):
         response = self.client.post("/cadastro", data={
             "name": "Cadastro com senha curta",
             "email": "senha.curta@example.test",
