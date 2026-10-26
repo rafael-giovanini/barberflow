@@ -1830,12 +1830,7 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertIn("12.50", response.text)
         self.assertTrue(response.content.startswith(bytes([0xEF, 0xBB, 0xBF])))
 
-
-if __name__ == "__main__":
-    unittest.main()
-
-
-    def test_public_registration_rejects_password_shorter_than_10(self):
+def test_public_registration_rejects_password_shorter_than_10(self):
         response = self.client.post("/cadastro", data={
             "name": "Cadastro com senha curta",
             "email": "senha.curta@example.test",
@@ -1927,3 +1922,7 @@ if __name__ == "__main__":
             "camera=(), microphone=(), geolocation=()",
         )
         self.assertEqual(response.headers.get("Cache-Control"), "no-store")
+
+
+if __name__ == "__main__":
+    unittest.main()
