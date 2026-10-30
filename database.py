@@ -6,7 +6,10 @@ import sqlite3
 import os
 from datetime import datetime
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "barbearia.db")
+DB_PATH = os.getenv(
+    "DATABASE_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "barbearia.db"),
+)
 
 
 def get_db():
@@ -27,7 +30,17 @@ def init_db():
         name TEXT NOT NULL,
         email TEXT UNIQUE NOT NULL,
         phone TEXT,
+        cpf TEXT,
+        birth_date TEXT,
+        zip_code TEXT,
+        address TEXT,
+        address_number TEXT,
+        address_complement TEXT,
+        neighborhood TEXT,
+        city TEXT,
+        state TEXT,
         password_hash TEXT NOT NULL,
+        first_access_required INTEGER NOT NULL DEFAULT 0,
         role TEXT NOT NULL DEFAULT 'customer',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
@@ -194,6 +207,24 @@ def init_db():
         c.execute("ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
     if "session_version" not in user_columns:
         c.execute("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0")
+    for column, definition in (
+        ("cpf", "TEXT"),
+        ("birth_date", "TEXT"),
+        ("zip_code", "TEXT"),
+        ("address", "TEXT"),
+        ("address_number", "TEXT"),
+        ("address_complement", "TEXT"),
+        ("neighborhood", "TEXT"),
+        ("city", "TEXT"),
+        ("state", "TEXT"),
+        ("first_access_required", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if column not in user_columns:
+            c.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
+    c.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_cpf_unique
+        ON users(cpf) WHERE cpf IS NOT NULL AND cpf != ''
+    """)
 
     # Tentativas de autenticação para limitação de força bruta, persistentes entre reinicializações.
     c.execute("""
@@ -302,6 +333,28 @@ def init_db():
     if c.fetchone()[0] == 0:
         seed_data(conn)
 
+    # Cria o primeiro administrador mesmo quando os dados de exemplo já existem.
+    # Isso permite configurar credenciais após a instalação inicial.
+    admin_email = os.getenv("INITIAL_ADMIN_EMAIL", "").strip().lower()
+    admin_password = os.getenv("INITIAL_ADMIN_PASSWORD", "")
+    if admin_email and admin_password:
+        from auth import hash_password
+        existing_admin = c.execute(
+            "SELECT id FROM users WHERE role='admin' LIMIT 1"
+        ).fetchone()
+        if not existing_admin:
+            admin_hash = hash_password(admin_password)
+            c.execute(
+                "INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
+                ("Administrador", admin_email, "", admin_hash, "admin")
+            )
+            admin_id = c.lastrowid
+            c.execute(
+                "INSERT INTO barbers (user_id, name, bio, active) VALUES (?,?,?,?)",
+                (admin_id, "Administrador", "", 1)
+            )
+            conn.commit()
+
     conn.close()
 
 
@@ -341,6 +394,10 @@ def get_settings(conn=None):
     rows = conn.execute("SELECT key, value FROM settings").fetchall()
     settings = dict(DEFAULT_SETTINGS)
     for r in rows:
+        # A credencial SMTP criptografada é consumida somente pelo serviço de e-mail;
+        # não a propaga aos contextos de template enviados às páginas.
+        if r["key"] == "smtp_password_encrypted":
+            continue
         settings[r["key"]] = r["value"]
     # Gera token do calendário se não existir
     if not settings.get("calendar_token"):
@@ -400,32 +457,8 @@ def seed_data(conn):
     for p in portfolio:
         c.execute("INSERT INTO portfolio (name, description, image_url, category, service_id) VALUES (?,?,?,?,?)", p)
 
-    # Cria conta administrativa somente quando credenciais são configuradas no ambiente.
-    # Nunca inserir uma senha padrão conhecida em uma instalação nova.
-    import os
-    admin_email = os.getenv("INITIAL_ADMIN_EMAIL", "").strip().lower()
-    admin_password = os.getenv("INITIAL_ADMIN_PASSWORD", "")
-    if admin_email and admin_password:
-        from auth import hash_password
-        existing_admin = c.execute(
-            "SELECT id FROM users WHERE role='admin' LIMIT 1"
-        ).fetchone()
-        if not existing_admin:
-            admin_hash = hash_password(admin_password)
-            c.execute(
-                "INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
-                ("Administrador", admin_email, "", admin_hash, "admin")
-            )
-            admin_id = c.lastrowid
-            c.execute(
-                "INSERT INTO barbers (user_id, name, bio, active) VALUES (?,?,?,?)",
-                (admin_id, "Administrador", "", 1)
-            )
-
     conn.commit()
     print("Dados iniciais inseridos.")
-    if not (admin_email and admin_password):
-        print("Configure INITIAL_ADMIN_EMAIL e INITIAL_ADMIN_PASSWORD para criar o administrador inicial.")
 
 
 if __name__ == "__main__":

@@ -69,6 +69,10 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertEqual(customer["session_version"], 0)
         self.assertIn("active", columns)
         self.assertIn("session_version", columns)
+        self.assertIn("cpf", columns)
+        self.assertIn("address", columns)
+        self.assertIn("first_access_required", columns)
+        self.assertEqual(customer["first_access_required"], 0)
         self.assertIsNotNone(reset_table)
 
 

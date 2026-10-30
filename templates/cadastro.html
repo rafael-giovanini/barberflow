@@ -1,28 +1,27 @@
 {% extends "base.html" %}
-{% block title %}Cadastro — Barbearia{% endblock %}
+{% block title %}Cadastro de cliente — BarberFlow{% endblock %}
 {% block content %}
-<div class="form-card">
-  <h2>Criar Conta</h2>
+<section class="section container" style="max-width:960px;"><div class="form-card customer-registration-card">
+  <h2 class="section-title">Cadastro de cliente</h2>
+  {% if created %}<div class="success-msg">Cadastro realizado. Agora acesse <a href="/primeiro-acesso">Primeiro acesso</a> com seu CPF para receber no e-mail cadastrado o link para criar sua senha.</div>{% endif %}
+  {% if request.query_params.get('cpf_nao_encontrado') %}<p class="text-muted">Não encontramos um cadastro para este CPF. Preencha seus dados para criar seu cadastro de cliente.</p>{% endif %}
   {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
-  <form method="POST" action="/cadastro">
-    <div class="form-group">
-      <label>Nome completo</label>
-      <input type="text" name="name" class="form-control" required placeholder="Seu nome">
-    </div>
-    <div class="form-group">
-      <label>E-mail</label>
-      <input type="email" name="email" class="form-control" required placeholder="seu@email.com">
-    </div>
-    <div class="form-group">
-      <label>Telefone / WhatsApp</label>
-      <input type="tel" name="phone" class="form-control" placeholder="(18) 99999-9999">
-    </div>
-    <div class="form-group">
-      <label>Senha</label>
-      <input type="password" name="password" class="form-control" required minlength="10" placeholder="Mínimo 10 caracteres">
-    </div>
-    <button type="submit" class="btn btn-dourado btn-block">Criar conta</button>
-  </form>
-  <p class="text-center mt-2 text-muted">Já tem conta? <a href="/login">Faça login</a></p>
-</div>
+  {% if not created %}<form method="post" action="/cadastro" class="customer-form-grid" data-address-form>
+    <div class="form-group"><label for="name">Nome completo</label><input id="name" type="text" name="name" class="form-control" value="{{ values.get('name','') }}" maxlength="120" autocomplete="name" required></div>
+    <div class="form-group"><label for="cpf">CPF</label><input id="cpf" type="text" name="cpf" data-mask="cpf" class="form-control" value="{{ values.get('cpf','') }}" inputmode="numeric" autocomplete="off" placeholder="000.000.000-00" required></div>
+    <div class="form-group"><label for="birth_date">Data de nascimento</label><input id="birth_date" type="date" name="birth_date" class="form-control" value="{{ values.get('birth_date','') }}" max="{{ today }}" required></div>
+    <div class="form-group"><label for="email">E-mail</label><input id="email" type="email" name="email" class="form-control" value="{{ values.get('email','') }}" autocomplete="email" maxlength="254" required></div>
+    <div class="form-group"><label for="phone">Telefone / WhatsApp</label><input id="phone" type="tel" name="phone" data-mask="phone" class="form-control" value="{{ values.get('phone','') }}" autocomplete="tel" placeholder="(11) 99999-9999" required></div>
+    <h3 class="form-grid-full">Endereço</h3>
+    <div class="form-group"><label for="zip_code">CEP</label><input id="zip_code" type="text" name="zip_code" data-mask="cep" class="form-control" value="{{ values.get('zip_code','') }}" inputmode="numeric" autocomplete="postal-code" maxlength="9" placeholder="00000-000" required><small class="field-hint form-grid-full" data-cep-message aria-live="polite"></small></div>
+    <div class="form-group"><label for="address">Rua / Avenida</label><input id="address" type="text" name="address" class="form-control" value="{{ values.get('address','') }}" autocomplete="address-line1" required></div>
+    <div class="form-group"><label for="address_number">Número</label><input id="address_number" type="text" name="address_number" class="form-control" value="{{ values.get('address_number','') }}" required></div>
+    <div class="form-group"><label for="address_complement">Complemento <small>(opcional)</small></label><input id="address_complement" type="text" name="address_complement" class="form-control" value="{{ values.get('address_complement','') }}" autocomplete="address-line2"></div>
+    <div class="form-group"><label for="neighborhood">Bairro</label><input id="neighborhood" type="text" name="neighborhood" class="form-control" value="{{ values.get('neighborhood','') }}" required></div>
+    <div class="form-group"><label for="city">Cidade</label><input id="city" type="text" name="city" class="form-control" value="{{ values.get('city','') }}" autocomplete="address-level2" required></div>
+    <div class="form-group"><label for="state">Estado (UF)</label><input id="state" type="text" name="state" class="form-control" value="{{ values.get('state','') }}" minlength="2" maxlength="2" autocomplete="address-level1" required></div>
+    <button type="submit" class="btn btn-dourado btn-block form-grid-full">Cadastrar dados</button>
+  </form>{% endif %}
+  <p class="text-center mt-2 text-muted">Já tem cadastro? <a href="/primeiro-acesso">Criar senha no primeiro acesso</a></p>
+</div></section>
 {% endblock %}

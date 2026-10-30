@@ -5,25 +5,93 @@ FastAPI + SQLite + Templates Jinja2
 import json
 import os
 import secrets
+from pathlib import Path
 import sqlite3
-from datetime import datetime, timedelta
+import smtplib
+from email.message import EmailMessage
+from email.utils import parseaddr
+from datetime import date, datetime, timedelta
 from typing import Optional
 
-from fastapi import FastAPI, Request, Form, HTTPException, Depends, Response
+from fastapi import FastAPI, Request, Form, File, UploadFile, HTTPException, Depends, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from itsdangerous import URLSafeTimedSerializer
 
-from database import init_db, get_db, get_settings
-from auth import hash_password, verify_password
+from database import DB_PATH, init_db, get_db, get_settings
+from auth import hash_password, verify_password, normalize_cpf, valid_cpf, valid_birth_date
+from smtp_settings import get_smtp_config, public_smtp_settings, validate_smtp_form, save_smtp_settings
 
 # Inicializa banco
 init_db()
 
 app = FastAPI(title="Sistema de Barbearia")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+LOGO_UPLOAD_DIR = Path(DB_PATH).resolve().parent / "uploads"
+LOGO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(LOGO_UPLOAD_DIR)), name="uploads")
+MAX_LOGO_SIZE = 3 * 1024 * 1024
 templates = Jinja2Templates(directory="templates")
+
+
+async def persist_image_upload(image_upload: UploadFile):
+    """Guarda uma imagem enviada em armazenamento persistente e retorna URL local e caminho."""
+    image_data = await image_upload.read(MAX_LOGO_SIZE + 1)
+    if len(image_data) > MAX_LOGO_SIZE:
+        return None, None, "tamanho"
+    if image_data.startswith(b"\x89PNG\r\n\x1a\n"):
+        extension = "png"
+    elif image_data.startswith(b"\xff\xd8\xff"):
+        extension = "jpg"
+    elif len(image_data) >= 12 and image_data[:4] == b"RIFF" and image_data[8:12] == b"WEBP":
+        extension = "webp"
+    else:
+        return None, None, "formato"
+    filename = f"image-{secrets.token_hex(16)}.{extension}"
+    path = LOGO_UPLOAD_DIR / filename
+    path.write_bytes(image_data)
+    return f"/uploads/{filename}", path, None
+
+
+def remove_uploaded_image(image_url):
+    """Remove apenas arquivos gerados pelo sistema dentro da pasta de uploads."""
+    if not image_url or not image_url.startswith("/uploads/"):
+        return
+    filename = image_url.removeprefix("/uploads/")
+    image_path = (LOGO_UPLOAD_DIR / filename).resolve()
+    if image_path.parent == LOGO_UPLOAD_DIR.resolve() and filename.startswith(("logo-", "image-")):
+        image_path.unlink(missing_ok=True)
+
+
+def is_stored_image_url(image_url):
+    """Confirma que uma URL local aponta para uma imagem armazenada pelo sistema."""
+    if not image_url or not image_url.startswith("/uploads/"):
+        return False
+    filename = image_url.removeprefix("/uploads/")
+    image_path = (LOGO_UPLOAD_DIR / filename).resolve()
+    return (image_path.parent == LOGO_UPLOAD_DIR.resolve()
+            and filename.startswith(("logo-", "image-"))
+            and image_path.suffix.lower() in {".png", ".jpg", ".webp"}
+            and image_path.is_file())
+
+
+def format_date_br(value):
+    """Formata datas ISO para exibição brasileira sem alterar valores internos."""
+    if not value:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%d/%m/%Y")
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).strftime("%d/%m/%Y")
+    except ValueError:
+        try:
+            return datetime.strptime(str(value)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+        except ValueError:
+            return str(value)
+
+
+templates.env.filters["date_br"] = format_date_br
 import json as _json
 templates.env.filters["from_json"] = lambda s: _json.loads(s) if s else []
 
@@ -208,13 +276,21 @@ def portfolio_page(request: Request):
 
 @app.get("/agendar", response_class=HTMLResponse)
 def agendar_page(request: Request):
+    user = get_current_user(request)
     db = get_db()
     services = db.execute("SELECT * FROM services WHERE active=1 ORDER BY price").fetchall()
     barbers = db.execute("SELECT * FROM barbers WHERE active=1").fetchall()
-    user = get_current_user(request)
+    customers = []
+    if user and user.get("role") in ("admin", "barber"):
+        customers = db.execute("""
+            SELECT id, name, phone, cpf FROM users
+            WHERE active=1 AND role='customer'
+            ORDER BY name COLLATE NOCASE
+        """).fetchall()
     db.close()
     return templates.TemplateResponse("agendar.html", {
         "request": request, "user": user, "services": services, "barbers": barbers,
+        "customers": customers,
     })
 
 
@@ -255,45 +331,71 @@ def carrinho(request: Request):
 # ---------- Auth ----------
 @app.get("/cadastro", response_class=HTMLResponse)
 def cadastro_page(request: Request):
-    return templates.TemplateResponse("cadastro.html", {"request": request, "user": None, "error": None})
+    return templates.TemplateResponse("cadastro.html", {
+        "request": request, "user": None, "error": None, "values": {}, "created": False,
+        "today": date.today().isoformat()
+    })
 
 
-@app.post("/cadastro")
-def cadastro(request: Request, name: str = Form(...), email: str = Form(...),
-             phone: str = Form(""), password: str = Form(...)):
-    name = name.strip()
-    email = email.strip().lower()
-    phone = phone.strip()
-    if not name or "@" not in email or len(password) < 10:
+@app.post("/cadastro", response_class=HTMLResponse)
+def cadastro(
+    request: Request, name: str = Form(...), email: str = Form(...), phone: str = Form(...),
+    cpf: str = Form(...), birth_date: str = Form(...), zip_code: str = Form(...),
+    address: str = Form(...), address_number: str = Form(...),
+    address_complement: str = Form(""), neighborhood: str = Form(...),
+    city: str = Form(...), state: str = Form(...)
+):
+    name, email = name.strip(), email.strip().lower()
+    phone, cpf = phone.strip(), normalize_cpf(cpf)
+    zip_code = "".join(ch for ch in zip_code if ch.isdigit())
+    address, address_number = address.strip(), address_number.strip()
+    address_complement = address_complement.strip()
+    neighborhood, city, state = neighborhood.strip(), city.strip(), state.strip().upper()
+    values = {
+        "name": name, "email": email, "phone": phone, "cpf": cpf,
+        "birth_date": birth_date, "zip_code": zip_code, "address": address,
+        "address_number": address_number, "address_complement": address_complement,
+        "neighborhood": neighborhood, "city": city, "state": state,
+    }
+    error = None
+    if not name or len(name) > 120 or "@" not in email:
+        error = "Informe nome completo e e-mail válidos."
+    elif not valid_cpf(cpf):
+        error = "Informe um CPF válido."
+    elif len(phone) < 10 or len(zip_code) != 8 or not address or not address_number or not neighborhood or not city or len(state) != 2:
+        error = "Preencha telefone e endereço completos."
+    elif not valid_birth_date(birth_date):
+        error = "Informe uma data de nascimento válida, que não esteja no futuro."
+    if error:
         return templates.TemplateResponse("cadastro.html", {
-            "request": request, "user": None,
-            "error": "Informe nome e e-mail válidos e uma senha com pelo menos 10 caracteres."
+            "request": request, "user": None, "error": error, "values": values, "created": False,
+            "today": date.today().isoformat()
         })
+
     db = get_db()
-    existing = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
-    if existing:
-        db.close()
-        return templates.TemplateResponse("cadastro.html", {
-            "request": request, "user": None, "error": "Este e-mail já está cadastrado."
-        })
-    pw_hash = hash_password(password)
     try:
-        cur = db.execute("INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
-                         (name, email, phone, pw_hash, "customer"))
+        db.execute("""
+            INSERT INTO users
+                (name, email, phone, cpf, birth_date, zip_code, address, address_number,
+                 address_complement, neighborhood, city, state, password_hash,
+                 first_access_required, role)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'customer')
+        """, (name, email, phone, cpf, birth_date, zip_code, address, address_number,
+              address_complement, neighborhood, city, state, hash_password(secrets.token_urlsafe(32))))
         db.commit()
-        user_id = cur.lastrowid
     except sqlite3.IntegrityError:
         db.rollback()
-        db.close()
+        error = "Já existe uma conta com este CPF ou e-mail. Se você já tem cadastro, use Primeiro acesso."
         return templates.TemplateResponse("cadastro.html", {
-            "request": request, "user": None,
-            "error": "Este e-mail já está cadastrado."
+            "request": request, "user": None, "error": error, "values": values, "created": False,
+            "today": date.today().isoformat()
         }, status_code=409)
     finally:
         db.close()
-    resp = RedirectResponse(url="/area-cliente", status_code=303)
-    set_session(resp, user_id, "customer", name)
-    return resp
+    return templates.TemplateResponse("cadastro.html", {
+        "request": request, "user": None, "error": None, "values": {}, "created": True,
+        "today": date.today().isoformat()
+    })
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -322,7 +424,8 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
         }, status_code=429)
 
     user = db.execute("SELECT * FROM users WHERE email=?", (normalized_email,)).fetchone()
-    valid = bool(user and user["active"] and verify_password(password, user["password_hash"]))
+    valid = bool(user and user["active"] and not user["first_access_required"]
+                 and verify_password(password, user["password_hash"]))
     if valid:
         # Atualiza hashes legados no próximo login válido, sem exigir redefinição
         # de senha nem invalidar a sessão recém-criada.
@@ -349,8 +452,11 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
     db.close()
 
     if not valid:
+        error = "E-mail ou senha inválidos."
+        if user and user["active"] and user["first_access_required"]:
+            error = "Sua conta ainda não foi ativada. Use Primeiro acesso para criar sua senha."
         return templates.TemplateResponse("login.html", {
-            "request": request, "user": None, "error": "E-mail ou senha inválidos."
+            "request": request, "user": None, "error": error
         })
     resp = RedirectResponse(url="/admin" if user["role"] in ("admin", "barber") else "/area-cliente", status_code=303)
     set_session(resp, user["id"], user["role"], user["name"])
@@ -455,6 +561,7 @@ async def api_agendar(request: Request):
         data = await request.json()
         barber_id = int(data["barber_id"])
         service_id = int(data["service_id"])
+        customer_id = int(data["customer_id"]) if data.get("customer_id") not in (None, "") else None
         appointment_date = datetime.strptime(str(data["date"]), "%Y-%m-%d").date()
         start = datetime.strptime(str(data["start_time"]), "%H:%M")
         notes = str(data.get("notes", "")).strip()[:500]
@@ -468,6 +575,16 @@ async def api_agendar(request: Request):
         service = db.execute("SELECT duration_min, price FROM services WHERE id=? AND active=1", (service_id,)).fetchone()
         if not barber or not service:
             return JSONResponse({"ok": False, "error": "Barbeiro ou serviço indisponível."}, status_code=400)
+        booking_user = user
+        if user.get("role") in ("admin", "barber"):
+            if not customer_id:
+                return JSONResponse({"ok": False, "error": "Selecione o cliente do agendamento."}, status_code=400)
+            booking_user = db.execute("""
+                SELECT id AS user_id, name, phone FROM users
+                WHERE id=? AND active=1 AND role='customer'
+            """, (customer_id,)).fetchone()
+            if not booking_user:
+                return JSONResponse({"ok": False, "error": "Cliente indisponível para agendamento."}, status_code=400)
         end = start + timedelta(minutes=service["duration_min"])
         work_days = json.loads(barber["work_days"] or "[]")
         if appointment_date.isoweekday() not in work_days:
@@ -492,7 +609,7 @@ async def api_agendar(request: Request):
         db.execute("""
             INSERT INTO appointments (user_id, barber_id, service_id, appointment_date, start_time, end_time, notes, service_price_cents)
             VALUES (?,?,?,?,?,?,?,?)
-        """, (user["user_id"], barber_id, service_id, appointment_date.isoformat(),
+        """, (booking_user["user_id"], barber_id, service_id, appointment_date.isoformat(),
               start.strftime("%H:%M"), end.strftime("%H:%M"), notes, int(round(float(service["price"]) * 100))))
         db.commit()
     except (ValueError, TypeError, KeyError, json.JSONDecodeError):
@@ -501,7 +618,7 @@ async def api_agendar(request: Request):
     finally:
         db.close()
     try:
-        msg = (f"🔔 NOVO AGENDAMENTO!\nCliente: {user['name']}\n"
+        msg = (f"🔔 NOVO AGENDAMENTO!\nCliente: {booking_user['name']}\n"
                f"Data: {appointment_date.strftime('%d/%m/%Y')} às {start.strftime('%H:%M')}\n"
                f"Serviço: {service_id}\nObs: {notes or '-'}")
         send_whatsapp_notify(msg)
@@ -763,25 +880,75 @@ def agenda_ics(token: str):
 
 # ---------- Área Administrativa (Barbeiro) ----------
 @app.get("/admin", response_class=HTMLResponse)
-def admin_dashboard(request: Request, mes: Optional[str] = None):
+def admin_dashboard(request: Request, mes: Optional[str] = None, ano: Optional[str] = None, mes_num: Optional[str] = None):
     user = get_current_user(request)
     if not user or user.get("role") not in ("admin", "barber"):
         return RedirectResponse(url="/login", status_code=303)
     db = get_db()
-    today = datetime.now().strftime("%Y-%m-%d")
-    selected_month = mes or today[:7]
+    today_date = datetime.now().date()
+    today = today_date.strftime("%Y-%m-%d")
+    latest_closed_date = today_date.replace(day=1) - timedelta(days=1)
+    latest_closed_month = latest_closed_date.strftime("%Y-%m")
+    first_available = db.execute("""
+        SELECT MIN(reference_date) AS first_date FROM (
+            SELECT occurred_on AS reference_date FROM financial_transactions WHERE occurred_on <= ?
+            UNION ALL
+            SELECT appointment_date AS reference_date FROM appointments WHERE appointment_date <= ?
+        )
+    """, (latest_closed_date.isoformat(), latest_closed_date.isoformat())).fetchone()["first_date"]
     try:
-        month_start = datetime.strptime(selected_month + "-01", "%Y-%m-%d").date()
-        if selected_month != month_start.strftime("%Y-%m"):
-            raise ValueError
-        next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
-        month_end = (next_month - timedelta(days=1)).strftime("%Y-%m-%d")
-        month_start = month_start.strftime("%Y-%m-%d")
+        first_available_date = datetime.strptime(first_available[:10], "%Y-%m-%d").date() if first_available else latest_closed_date
     except (TypeError, ValueError):
-        selected_month = today[:7]
-        month_start = today[:8] + "01"
-        next_month = (datetime.strptime(month_start, "%Y-%m-%d").date().replace(day=28) + timedelta(days=4)).replace(day=1)
-        month_end = (next_month - timedelta(days=1)).strftime("%Y-%m-%d")
+        first_available_date = latest_closed_date
+    first_available_month = f"{first_available_date.year:04d}-01"
+    first_available_year = first_available_date.year
+    latest_closed_year = latest_closed_date.year
+    available_years = list(range(first_available_year, latest_closed_year + 1))
+
+    legacy_year = legacy_month_num = None
+    if mes:
+        try:
+            parsed_legacy = datetime.strptime(mes, "%Y-%m")
+            if parsed_legacy.strftime("%Y-%m") == mes:
+                legacy_year, legacy_month_num = parsed_legacy.year, parsed_legacy.month
+        except (TypeError, ValueError):
+            pass
+    try:
+        requested_year = int(ano) if ano else legacy_year
+    except (TypeError, ValueError):
+        requested_year = None
+    selected_year = requested_year if requested_year in available_years else latest_closed_year
+
+    month_names = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    first_month_num = int(first_available_month[5:7]) if selected_year == first_available_year else 1
+    last_month_num = latest_closed_date.month if selected_year == latest_closed_year else 12
+    available_month_numbers = list(range(first_month_num, last_month_num + 1))
+    if not available_month_numbers:
+        selected_year = latest_closed_year
+        first_month_num = int(first_available_month[5:7]) if selected_year == first_available_year else 1
+        last_month_num = latest_closed_date.month if selected_year == latest_closed_year else 12
+        available_month_numbers = list(range(first_month_num, last_month_num + 1))
+    try:
+        requested_month_num = int(mes_num) if mes_num else legacy_month_num
+    except (TypeError, ValueError):
+        requested_month_num = None
+    selected_month_num = requested_month_num if requested_month_num in available_month_numbers else available_month_numbers[-1]
+    selected_month = f"{selected_year:04d}-{selected_month_num:02d}"
+    available_months = [{"value": f"{month:02d}", "label": month_names[month - 1]}
+                        for month in available_month_numbers]
+    available_months_by_year = {}
+    for year in available_years:
+        min_month = int(first_available_month[5:7]) if year == first_available_year else 1
+        max_month = latest_closed_date.month if year == latest_closed_year else 12
+        available_months_by_year[str(year)] = [
+            {"value": f"{month:02d}", "label": month_names[month - 1]}
+            for month in range(min_month, max_month + 1)
+        ]
+    month_start_date = datetime.strptime(selected_month + "-01", "%Y-%m-%d").date()
+    next_month_date = (month_start_date.replace(day=28) + timedelta(days=4)).replace(day=1)
+    month_start = month_start_date.strftime("%Y-%m-%d")
+    month_end = (next_month_date - timedelta(days=1)).strftime("%Y-%m-%d")
     today_appts = db.execute("""
         SELECT a.*, s.name as service_name, u.name as customer_name, u.phone as customer_phone
         FROM appointments a
@@ -834,7 +1001,10 @@ def admin_dashboard(request: Request, mes: Optional[str] = None):
         "request": request, "user": user, "today_appts": today_appts,
         "total_valor": total_valor, "pending_orders": pending_orders,
         "total_services": total_services, "total_products": total_products, "today": today,
-        "selected_month": selected_month, "management": management,
+        "selected_month": selected_month, "selected_year": selected_year,
+        "selected_month_num": f"{selected_month_num:02d}",
+        "available_years": available_years, "available_months": available_months,
+        "available_months_by_year": available_months_by_year, "management": management,
     })
 
 
@@ -1018,7 +1188,7 @@ def admin_financeiro_exportar(request: Request, inicio: Optional[str] = None, fi
                 value = "'" + str(value)
             values.append(value)
         writer.writerow([
-            row["occurred_on"],
+            datetime.strptime(row["occurred_on"], "%Y-%m-%d").strftime("%d/%m/%Y"),
             "Entrada" if row["transaction_type"] == "income" else "Despesa",
             values[0], values[1], f'{row["amount_cents"] / 100:.2f}',
             values[2], row["status"], values[3], values[4],
@@ -1429,10 +1599,10 @@ def admin_produtos(request: Request):
 
 
 @app.post("/admin/produtos/salvar")
-def admin_produto_salvar(request: Request, name: str = Form(...), description: str = Form(""),
+async def admin_produto_salvar(request: Request, name: str = Form(...), description: str = Form(""),
                          price: float = Form(...), stock: int = Form(0), cost_price: float = Form(0),
                          category: str = Form("Geral"), image_url: str = Form(""),
-                         product_id: Optional[int] = Form(None)):
+                         product_id: Optional[int] = Form(None), image_file: UploadFile = File(None)):
     user = get_current_user(request)
     if not user or user.get("role") not in ("admin", "barber"):
         return RedirectResponse(url="/login", status_code=303)
@@ -1441,26 +1611,43 @@ def admin_produto_salvar(request: Request, name: str = Form(...), description: s
         name.strip(), description.strip(), category.strip(), image_url.strip()
     )
     if (not name or len(name) > 120 or len(description) > 2000 or
-            not category or len(category) > 80 or len(image_url) > 1000 or
+            not category or len(category) > 80 or len(image_url) > 2000 or
             not math.isfinite(price) or price < 0 or price > 1_000_000 or
             not math.isfinite(cost_price) or cost_price < 0 or
             stock < 0 or stock > 1_000_000):
         return RedirectResponse(url="/admin/produtos?erro=dados", status_code=303)
-    if image_url:
-        from urllib.parse import urlsplit
-        parsed_image = urlsplit(image_url)
-        if parsed_image.scheme not in {"https", "http"} or not parsed_image.hostname:
-            return RedirectResponse(url="/admin/produtos?erro=imagem", status_code=303)
+
+    uploaded_url, uploaded_path = None, None
+    if getattr(image_file, "filename", ""):
+        uploaded_url, uploaded_path, upload_error = await persist_image_upload(image_file)
+        if upload_error:
+            return RedirectResponse(url=f"/admin/produtos?imagem_erro={upload_error}", status_code=303)
+        image_url = uploaded_url
+    elif image_url:
+        if image_url.startswith("/uploads/"):
+            if not is_stored_image_url(image_url):
+                return RedirectResponse(url="/admin/produtos?erro=imagem", status_code=303)
+        else:
+            from urllib.parse import urlsplit
+            parsed_image = urlsplit(image_url)
+            if parsed_image.scheme not in {"https", "http"} or not parsed_image.hostname:
+                return RedirectResponse(url="/admin/produtos?erro=imagem", status_code=303)
     if user.get("role") != "admin":
+        remove_uploaded_image(uploaded_url)
         return RedirectResponse(url="/login", status_code=303)
     db = get_db()
+    old_image_url = ""
     try:
         db.execute("BEGIN IMMEDIATE")
         if product_id:
-            current = db.execute("SELECT stock FROM products WHERE id=?", (product_id,)).fetchone()
+            current = db.execute("SELECT stock, image_url FROM products WHERE id=?", (product_id,)).fetchone()
             if not current:
                 db.rollback()
+                remove_uploaded_image(uploaded_url)
                 return RedirectResponse(url="/admin/produtos?erro=nao_encontrado", status_code=303)
+            old_image_url = current["image_url"] or ""
+            if not uploaded_url and not image_url:
+                image_url = old_image_url
             changed_qty = stock - int(current["stock"])
             db.execute("UPDATE products SET name=?, description=?, price=?, cost_price=?, stock=?, category=?, image_url=? WHERE id=?",
                 (name, description, price, cost_price, stock, category, image_url, product_id))
@@ -1478,11 +1665,13 @@ def admin_produto_salvar(request: Request, name: str = Form(...), description: s
                     VALUES (?, 'opening', ?, ?, 'Saldo inicial do cadastro', ?)""",
                     (cur.lastrowid, stock, int(round(cost_price * 100)), user["user_id"]))
         db.commit()
+    except Exception:
+        db.rollback()
+        remove_uploaded_image(uploaded_url)
+        raise
     finally:
         db.close()
     return RedirectResponse(url="/admin/produtos?salvo=1", status_code=303)
-
-
 
 
 @app.post("/admin/estoque/entrada")
@@ -1547,18 +1736,42 @@ def admin_portfolio(request: Request):
 
 
 @app.post("/admin/portfolio/salvar")
-def admin_portfolio_salvar(request: Request, name: str = Form(...), description: str = Form(""),
-                           image_url: str = Form(...), category: str = Form("Corte"),
-                           service_id: Optional[int] = Form(None)):
+async def admin_portfolio_salvar(request: Request, name: str = Form(...), description: str = Form(""),
+                           image_url: str = Form(""), category: str = Form("Corte"),
+                           service_id: Optional[int] = Form(None), image_file: UploadFile = File(None)):
     user = get_current_user(request)
     if not user or user.get("role") not in ("admin", "barber"):
         return RedirectResponse(url="/login", status_code=303)
+    name, description, image_url, category = name.strip(), description.strip(), image_url.strip(), category.strip()
+    if not name or len(name) > 120 or len(description) > 2000 or len(category) > 80:
+        return RedirectResponse(url="/admin/portfolio?erro=dados", status_code=303)
+    uploaded_url, uploaded_path = None, None
+    if getattr(image_file, "filename", ""):
+        uploaded_url, uploaded_path, upload_error = await persist_image_upload(image_file)
+        if upload_error:
+            return RedirectResponse(url=f"/admin/portfolio?imagem_erro={upload_error}", status_code=303)
+        image_url = uploaded_url
+    else:
+        if image_url.startswith("/uploads/"):
+            valid_image_url = is_stored_image_url(image_url)
+        else:
+            from urllib.parse import urlsplit
+            parsed_image = urlsplit(image_url)
+            valid_image_url = parsed_image.scheme in {"https", "http"} and bool(parsed_image.hostname)
+        if len(image_url) > 2000 or not valid_image_url:
+            return RedirectResponse(url="/admin/portfolio?erro=imagem", status_code=303)
     db = get_db()
-    db.execute("INSERT INTO portfolio (name, description, image_url, category, service_id) VALUES (?,?,?,?,?)",
-               (name, description, image_url, category, service_id))
-    db.commit()
-    db.close()
-    return RedirectResponse(url="/admin/portfolio", status_code=303)
+    try:
+        db.execute("INSERT INTO portfolio (name, description, image_url, category, service_id) VALUES (?,?,?,?,?)",
+                   (name, description, image_url, category, service_id))
+        db.commit()
+    except Exception:
+        db.rollback()
+        remove_uploaded_image(uploaded_url)
+        raise
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/portfolio?salvo=1", status_code=303)
 
 
 @app.post("/admin/portfolio/excluir")
@@ -1686,9 +1899,15 @@ def admin_configuracoes(request: Request):
     user = get_current_user(request)
     if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
-    settings = get_settings()
+    db = get_db()
+    try:
+        settings = get_settings(db)
+        smtp_settings = public_smtp_settings(get_smtp_config(db))
+    finally:
+        db.close()
     return templates.TemplateResponse("admin/configuracoes.html", {
         "request": request, "user": user, "settings": settings,
+        "smtp_settings": smtp_settings,
     })
 
 
@@ -1702,23 +1921,121 @@ async def admin_configuracoes_salvar(request: Request):
                     "color_primary_light", "color_bg", "color_card", "color_text",
                     "whatsapp", "instagram", "address", "whatsapp_notify",
                     "whatsapp_api_url"}
+
+    logo_upload = form.get("logo_file")
+    uploaded_logo = None
+    if getattr(logo_upload, "filename", ""):
+        image_url, saved_logo, upload_error = await persist_image_upload(logo_upload)
+        if upload_error:
+            return RedirectResponse(url=f"/admin/configuracoes?logo_erro={upload_error}", status_code=303)
+        uploaded_logo = (image_url, saved_logo)
+
+    logo_url = uploaded_logo[0] if uploaded_logo else str(form.get("logo_url", "")).strip()[:2000]
+    if logo_url and not uploaded_logo:
+        if logo_url.startswith("/uploads/"):
+            if not is_stored_image_url(logo_url):
+                return RedirectResponse(url="/admin/configuracoes?logo_erro=url", status_code=303)
+        else:
+            from urllib.parse import urlsplit
+            parsed_logo = urlsplit(logo_url)
+            if parsed_logo.scheme not in {"http", "https"} or not parsed_logo.hostname:
+                return RedirectResponse(url="/admin/configuracoes?logo_erro=url", status_code=303)
+
+    values = {}
+    for key in allowed_keys.intersection(form.keys()):
+        values[key] = logo_url if key == "logo_url" else str(form[key]).strip()[:2000]
+    if "logo_url" not in values:
+        values["logo_url"] = logo_url
+    if values.get("whatsapp_api_url"):
+        from urllib.parse import urlsplit
+        parsed = urlsplit(values["whatsapp_api_url"])
+        if parsed.scheme != "https" or not parsed.hostname:
+            return RedirectResponse(url="/admin/configuracoes?erro=url", status_code=303)
+
     db = get_db()
+    saved_logo = None
     try:
-        for key in allowed_keys.intersection(form.keys()):
-            value = str(form[key]).strip()[:2000]
-            if key in {"whatsapp_api_url"} and value:
-                from urllib.parse import urlsplit
-                parsed = urlsplit(value)
-                if parsed.scheme != "https" or not parsed.hostname:
-                    db.close()
-                    return RedirectResponse(url="/admin/configuracoes?erro=url", status_code=303)
+        old_logo_url = get_settings(db).get("logo_url", "")
+        if uploaded_logo:
+            saved_logo = uploaded_logo[1]
+        for key, value in values.items():
             db.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                        (key, value))
         db.commit()
+    except Exception:
+        db.rollback()
+        if saved_logo:
+            saved_logo.unlink(missing_ok=True)
+        raise
     finally:
         db.close()
+
     return RedirectResponse(url="/admin/configuracoes?salvo=1", status_code=303)
+
+@app.post("/admin/configuracoes/smtp/salvar")
+async def admin_smtp_salvar(request: Request):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+    form = await request.form()
+    db = get_db()
+    try:
+        current = get_smtp_config(db)
+        values, error = validate_smtp_form(form, current["password_is_configured"])
+        if error:
+            return RedirectResponse(url=f"/admin/configuracoes?smtp_erro={error}", status_code=303)
+        try:
+            save_smtp_settings(db, values)
+            db.commit()
+        except RuntimeError:
+            db.rollback()
+            return RedirectResponse(url="/admin/configuracoes?smtp_erro=chave", status_code=303)
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/configuracoes?smtp_salvo=1", status_code=303)
+
+
+@app.post("/admin/configuracoes/smtp/testar")
+async def admin_smtp_testar(request: Request):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+    form = await request.form()
+    recipient = str(form.get("recipient", "")).strip()
+    address = parseaddr(recipient)[1]
+    if not address or "@" not in address or len(address) > 320:
+        return RedirectResponse(url="/admin/configuracoes?smtp_teste=destinatario", status_code=303)
+    db = get_db()
+    try:
+        config = get_smtp_config(db)
+    finally:
+        db.close()
+    if not (config["enabled"] and config["smtp_host"].strip() and config["smtp_from"].strip()
+            and config["app_base_url"].strip().startswith("https://")):
+        return RedirectResponse(url="/admin/configuracoes?smtp_teste=configuracao", status_code=303)
+    smtp_user = config["smtp_user"].strip()
+    if smtp_user and not config["password"]:
+        return RedirectResponse(url="/admin/configuracoes?smtp_teste=senha", status_code=303)
+    message = EmailMessage()
+    message["Subject"] = "Teste de envio — BarberFlow"
+    message["From"] = config["smtp_from"].strip()
+    message["To"] = address
+    message.set_content("Este é um e-mail de teste enviado pelas configurações SMTP do BarberFlow.")
+    try:
+        smtp_factory = smtplib.SMTP_SSL if config["smtp_security"] == "ssl" else smtplib.SMTP
+        with smtp_factory(config["smtp_host"].strip(), int(config["smtp_port"] or "587"), timeout=10) as smtp:
+            if config["smtp_security"] != "ssl":
+                smtp.ehlo()
+            if config["smtp_security"] == "starttls":
+                smtp.starttls()
+                smtp.ehlo()
+            if smtp_user:
+                smtp.login(smtp_user, config["password"])
+            smtp.send_message(message)
+    except Exception:
+        return RedirectResponse(url="/admin/configuracoes?smtp_teste=erro_envio", status_code=303)
+    return RedirectResponse(url="/admin/configuracoes?smtp_teste=sucesso", status_code=303)
 
 
 # ---------- Gerenciamento de Barbeiros ----------

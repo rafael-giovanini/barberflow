@@ -10,6 +10,7 @@
     <a href="/admin/portfolio" class="active">📸 Portfólio</a>
     <a href="/admin/barbeiros">👤 Barbeiros</a>
     <a href="/admin/pedidos">📦 Pedidos</a>
+    {% if user.role == "admin" %}<a href="/admin/financeiro">💰 Financeiro</a>{% endif %}
     <a href="/app" target="_blank">📱 App Mobile</a>
     <a href="/admin/configuracoes">⚙️ Configurações</a>
     <a href="/">🌐 Ver Site</a>
@@ -19,6 +20,7 @@
   <div class="admin-content">
     <h1>Gerenciar Portfólio</h1>
     <p class="text-muted mb-4">Adicione fotos dos seus cortes com explicação — isso ajuda o cliente a escolher!</p>
+    {% if request.query_params.get('imagem_erro') == 'tamanho' %}<div class="error-msg">A imagem deve ter no máximo 3 MB.</div>{% elif request.query_params.get('imagem_erro') == 'formato' %}<div class="error-msg">Envie uma imagem PNG, JPG ou WebP.</div>{% elif request.query_params.get('erro') == 'imagem' %}<div class="error-msg">Informe um link público válido ou selecione uma imagem.</div>{% endif %}
 
     <button class="btn btn-dourado btn-sm mb-4" onclick="document.getElementById('modal').classList.add('open')">+ Adicionar Foto</button>
 
@@ -46,7 +48,7 @@
   <div class="modal">
     <button class="modal-close" onclick="document.getElementById('modal').classList.remove('open')">✕</button>
     <h3>Nova Foto no Portfólio</h3>
-    <form method="POST" action="/admin/portfolio/salvar">
+    <form method="POST" action="/admin/portfolio/salvar" enctype="multipart/form-data">
       <div class="form-group">
         <label>Nome do corte / estilo</label>
         <input type="text" name="name" class="form-control" required placeholder="Ex: Degradê Médio com Textura">
@@ -56,8 +58,10 @@
         <textarea name="description" class="form-control" rows="3" required placeholder="Descreva o corte, quem combina, como manter..."></textarea>
       </div>
       <div class="form-group">
-        <label>URL da imagem</label>
-        <input type="url" name="image_url" class="form-control" required placeholder="https://... (use Imgur ou similar)">
+        <label>Imagem por link (opcional)</label>
+        <input type="url" name="image_url" class="form-control" placeholder="https://site.com/imagem.png">
+        <small class="text-muted">Ou escolha uma imagem do computador: PNG, JPG ou WebP, até 3 MB. O arquivo enviado substitui o link.</small>
+        <input type="file" name="image_file" class="form-control" accept="image/png,image/jpeg,image/webp">
       </div>
       <div class="flex">
         <div class="form-group" style="flex:1;">

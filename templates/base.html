@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Barbearia Premium{% endblock %}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=1">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=9">
   {% set s = request.state.settings %}
   <style>
     :root {
@@ -17,14 +17,25 @@
     }
   </style>
   <style>
-    .password-input-wrap { display: flex; align-items: stretch; gap: 8px; }
-    .password-input-wrap .form-control { flex: 1; min-width: 0; }
-    .password-toggle {
-      flex: 0 0 auto; padding: 0 12px; border: 1px solid var(--cinza);
-      border-radius: 6px; background: var(--preto-claro); color: var(--dourado);
-      cursor: pointer; font: inherit; font-size: 0.85rem;
+    .password-input-wrap {
+      display: flex; align-items: stretch; width: 100%;
+      border: 1px solid var(--cinza); border-radius: 6px; overflow: hidden;
+      background: var(--preto); transition: border-color 0.2s;
     }
-    .password-toggle:focus-visible { outline: 2px solid var(--dourado); outline-offset: 2px; }
+    .password-input-wrap:focus-within { border-color: var(--dourado); }
+    .password-input-wrap .form-control {
+      flex: 1; min-width: 0; border: 0; border-radius: 0;
+      background: transparent; box-shadow: none;
+    }
+    .password-input-wrap .form-control:focus { outline: none; border-color: transparent; }
+    .password-toggle {
+      flex: 0 0 auto; align-self: center; margin: 3px; padding: 8px 12px;
+      border: 1px solid var(--dourado); border-radius: 4px;
+      background: transparent; color: var(--dourado-claro);
+      cursor: pointer; font: inherit; font-size: 0.85rem; transition: background 0.2s, color 0.2s;
+    }
+    .password-toggle:hover { background: var(--dourado); color: var(--preto); }
+    .password-toggle:focus-visible { outline: 2px solid var(--dourado-claro); outline-offset: 1px; }
   </style>
 </head>
 <body>
@@ -39,27 +50,27 @@
       </a>
       <button class="nav-toggle" onclick="document.querySelector('.nav-links').classList.toggle('open')">&#9776;</button>
       <ul class="nav-links">
-        <li><a href="/">Início</a></li>
-        <li><a href="/servicos">Serviços</a></li>
-        <li><a href="/portfolio">Portfólio</a></li>
-        <li><a href="/agendar">Agendar</a></li>
-        <li><a href="/loja">Loja{% if cart_count and cart_count > 0 %} <span class="cart-badge">{{ cart_count }}</span>{% endif %}</a></li>
+        <li><a href="/" class="{{ 'active' if request.url.path == '/' else '' }}" {% if request.url.path == '/' %}aria-current="page"{% endif %}>Início</a></li>
+        <li><a href="/servicos" class="{{ 'active' if request.url.path == '/servicos' else '' }}" {% if request.url.path == '/servicos' %}aria-current="page"{% endif %}>Serviços</a></li>
+        <li><a href="/portfolio" class="{{ 'active' if request.url.path == '/portfolio' else '' }}" {% if request.url.path == '/portfolio' %}aria-current="page"{% endif %}>Portfólio</a></li>
+        <li><a href="/agendar" class="{{ 'active' if request.url.path.startswith('/agendar') else '' }}" {% if request.url.path.startswith('/agendar') %}aria-current="page"{% endif %}>Agendar</a></li>
+        <li><a href="/loja" class="{{ 'active' if request.url.path.startswith(('/loja', '/carrinho', '/pedido-confirmado')) else '' }}" {% if request.url.path.startswith(('/loja', '/carrinho', '/pedido-confirmado')) %}aria-current="page"{% endif %}>Loja{% if cart_count and cart_count > 0 %} <span class="cart-badge">{{ cart_count }}</span>{% endif %}</a></li>
         {% if user %}
           {% if user.role in ['admin', 'barber'] %}
-            <li><a href="/admin">Painel</a></li>
+            <li><a href="/admin" class="{{ 'active' if request.url.path.startswith('/admin') and not request.url.path.startswith('/admin/clientes') else '' }}" {% if request.url.path.startswith('/admin') and not request.url.path.startswith('/admin/clientes') %}aria-current="page"{% endif %}>Painel</a></li>
             {% if user.role == 'admin' %}
-              <li><a href="/admin/clientes">Clientes</a></li>
-              <li><a href="/admin/clientes/novo">Cadastrar cliente</a></li>
+              <li><a href="/admin/clientes" class="{{ 'active' if request.url.path == '/admin/clientes' else '' }}" {% if request.url.path == '/admin/clientes' %}aria-current="page"{% endif %}>Clientes</a></li>
+              <li><a href="/admin/clientes/novo" class="{{ 'active' if request.url.path == '/admin/clientes/novo' else '' }}" {% if request.url.path == '/admin/clientes/novo' %}aria-current="page"{% endif %}>Cadastrar cliente</a></li>
             {% else %}
-              <li><a href="/admin/clientes/novo">Cadastrar cliente</a></li>
+              <li><a href="/admin/clientes/novo" class="{{ 'active' if request.url.path == '/admin/clientes/novo' else '' }}" {% if request.url.path == '/admin/clientes/novo' %}aria-current="page"{% endif %}>Cadastrar cliente</a></li>
             {% endif %}
           {% else %}
-            <li><a href="/area-cliente">Minha Área</a></li>
+            <li><a href="/area-cliente" class="{{ 'active' if request.url.path.startswith('/area-cliente') else '' }}" {% if request.url.path.startswith('/area-cliente') %}aria-current="page"{% endif %}>Minha Área</a></li>
           {% endif %}
-          <li><a href="/minha-conta">Minha conta</a></li>
+          <li><a href="/minha-conta" class="{{ 'active' if request.url.path == '/minha-conta' else '' }}" {% if request.url.path == '/minha-conta' %}aria-current="page"{% endif %}>Minha conta</a></li>
           <li><a href="/logout">Sair</a></li>
         {% else %}
-          <li><a href="/login">Entrar</a></li>
+          <li><a href="/login" class="{{ 'active' if request.url.path == '/login' else '' }}" {% if request.url.path == '/login' %}aria-current="page"{% endif %}>Entrar</a></li>
         {% endif %}
       </ul>
     </div>
@@ -123,6 +134,63 @@
       });
       wrapper.appendChild(button);
     });
+  </script>
+  <script>
+    (() => {
+      const digits = (value) => value.replace(/\D/g, "");
+      const format = (kind, value) => {
+        const d = digits(value);
+        if (kind === "cpf") return d.slice(0, 11).replace(/(\d{3})(\d)/, "$1.$2").replace(/(\d{3})(\d)/, "$1.$2").replace(/(\d{3})(\d{1,2})$/, "$1-$2");
+        if (kind === "cep") return d.slice(0, 8).replace(/(\d{5})(\d)/, "$1-$2");
+        if (kind === "phone") {
+          const p = d.slice(0, 11);
+          if (p.length <= 2) return p ? `(${p}` : "";
+          const area = p.slice(0, 2), rest = p.slice(2);
+          return `(${area}) ${rest.length > 8 ? rest.slice(0, 5) + "-" + rest.slice(5) : rest.length > 4 ? rest.slice(0, 4) + "-" + rest.slice(4) : rest}`;
+        }
+        return value;
+      };
+      document.querySelectorAll("[data-mask]").forEach((input) => {
+        input.value = format(input.dataset.mask, input.value);
+        input.addEventListener("input", () => { input.value = format(input.dataset.mask, input.value); });
+      });
+      document.querySelectorAll("[data-display-mask]").forEach((value) => {
+        value.textContent = format(value.dataset.displayMask, value.textContent.trim());
+      });
+      document.querySelectorAll("form[data-address-form]").forEach((form) => {
+        const zip = form.querySelector('[name="zip_code"]');
+        const message = form.querySelector("[data-cep-message]");
+        if (!zip) return;
+        let requestId = 0;
+        let lastLookupCep = "";
+        const lookup = async () => {
+          const cep = digits(zip.value);
+          if (cep.length !== 8 || cep === lastLookupCep) return;
+          lastLookupCep = cep;
+          const currentRequest = ++requestId;
+          if (message) message.textContent = "Consultando CEP…";
+          try {
+            const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+            if (!response.ok) throw new Error("Falha na consulta");
+            const data = await response.json();
+            if (currentRequest !== requestId) return;
+            if (data.erro) { if (message) message.textContent = "CEP não encontrado. Confira o número e tente novamente."; return; }
+            [["address", data.logradouro], ["neighborhood", data.bairro], ["city", data.localidade], ["state", data.uf]].forEach(([name, value]) => {
+              const field = form.querySelector(`[name="${name}"]`);
+              if (field) { field.value = value || ""; field.dispatchEvent(new Event("input", { bubbles: true })); }
+            });
+            if (message) message.textContent = "Endereço preenchido pelo CEP. Confira e complete o número.";
+          } catch (_) {
+            if (currentRequest === requestId && message) message.textContent = "Não foi possível consultar o CEP agora. Preencha o endereço manualmente.";
+          }
+        };
+        zip.addEventListener("blur", lookup);
+        zip.addEventListener("input", () => {
+          if (digits(zip.value).length === 8) lookup();
+          else { requestId++; lastLookupCep = ""; if (message) message.textContent = ""; }
+        });
+      });
+    })();
   </script>
   {% block scripts %}{% endblock %}
 </body>

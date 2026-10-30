@@ -18,8 +18,8 @@ Use `.env.example` como referência, mas configure as variáveis no gerenciador 
 - `SECRET_KEY`: segredo aleatório persistente, com pelo menos 32 caracteres. Gere um valor com `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Guarde-o em um gerenciador de segredos e mantenha uma cópia de recuperação protegida.
 - `COOKIE_SECURE=1`: mantenha habilitado com HTTPS. Em produção, a aplicação força cookies seguros.
 - `INITIAL_ADMIN_EMAIL` e `INITIAL_ADMIN_PASSWORD`: configure credenciais fortes do primeiro administrador antes da primeira inicialização de um banco novo. Não presuma que essa configuração alterará automaticamente uma conta existente; revise as contas existentes e troque credenciais antigas separadamente.
-- `APP_BASE_URL`: URL pública completa começando por `https://`, sem apontar para localhost.
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, e quando exigido `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_STARTTLS`: credenciais e parâmetros fornecidos pelo serviço de e-mail.
+- `APP_BASE_URL`: URL pública completa começando por `https://`, sem apontar para localhost. Também pode ser configurada na seção de e-mail do painel administrativo.
+- SMTP pode ser configurado em `/admin/configuracoes` e testado com envio para um endereço escolhido. Como alternativa, use `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, opcionalmente `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_STARTTLS` e `SMTP_SECURITY` (`starttls`, `ssl` ou `none`) no ambiente. Os campos configurados no painel ficam no SQLite; a senha é criptografada com uma chave derivada da `SECRET_KEY`. Mantenha essa chave persistente e protegida: ao trocá-la, será necessário cadastrar novamente a senha SMTP.
 
 A alteração de `SECRET_KEY` invalida os cookies de sessão assinados existentes. Planeje essa troca e não gere uma chave nova a cada reinicialização.
 
@@ -31,7 +31,7 @@ A alteração de `SECRET_KEY` invalida os cookies de sessão assinados existente
 4. Inicie com um servidor ASGI adequado, por exemplo `uvicorn app:app --host 127.0.0.1 --port 8000`, atrás de um proxy HTTPS configurado corretamente. Ajuste o bind e o processo conforme a arquitetura real do host.
 5. Verifique a página inicial, login/logout, permissões administrativas, cadastro e agendamento.
 6. Confirme nos cabeçalhos HTTP que os cookies de sessão são `HttpOnly`, `Secure` em HTTPS e `SameSite=Lax`; confirme também que a URL pública redireciona/serve exclusivamente por HTTPS.
-7. Só habilite recuperação de senha após testar envio e recebimento de e-mail em uma conta controlada. Confirme expiração e uso único do link. Não inclua tokens ou senhas em logs.
+7. Salve os dados SMTP no painel, envie o e-mail de teste para uma conta controlada e confirme o recebimento. Depois valide recuperação, expiração e uso único do link. Não inclua tokens ou senhas em logs.
 
 ## 4. Backup do SQLite
 
@@ -102,7 +102,7 @@ Para um exercício de restauração, pare a aplicação, preserve uma cópia do 
 - [ ] HTTPS funcional; cookies seguros confirmados.
 - [ ] Banco em armazenamento persistente com permissões mínimas.
 - [ ] Backup automático configurado, cópia separada protegida e restauração testada.
-- [ ] SMTP testado de ponta a ponta; recuperação de senha validada.
+- [ ] SMTP salvo no painel ou no ambiente, teste de entrega concluído e recuperação de senha validada.
 - [ ] Conta administrativa revisada; nenhuma senha de demonstração ativa.
 - [ ] Testes automatizados aprovados e fluxos críticos validados manualmente.
 - [ ] Logs e monitoramento sem senhas, tokens ou dados pessoais desnecessários.

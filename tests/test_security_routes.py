@@ -6,6 +6,7 @@ Usa um banco SQLite temporário por teste; nenhum banco de desenvolvimento/produ
 import hashlib
 import importlib
 import os
+import re
 import tempfile
 from datetime import datetime, timedelta, timezone
 import unittest
@@ -60,10 +61,41 @@ class SecurityRouteTests(unittest.TestCase):
     def _login(self, email, password="SenhaTeste-123"):
         return self.client.post("/login", data={"email": email, "password": password})
 
+    def _customer_form(self, **overrides):
+        values = {
+            "name": "Cliente de Primeiro Acesso", "email": "novo.cliente@example.test",
+            "phone": "11987654321", "cpf": "529.982.247-25", "birth_date": "1990-01-15",
+            "zip_code": "01001-000", "address": "Praça da Sé", "address_number": "100",
+            "address_complement": "", "neighborhood": "Sé", "city": "São Paulo", "state": "SP",
+        }
+        values.update(overrides)
+        return values
+
+    def test_admin_dashboard_shows_full_width_management_and_month_picker(self):
+        self._login("admin@example.test")
+        response = self.client.get("/admin")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('class="form-card management-panel"', response.text)
+        self.assertIn('name="ano" data-year-select', response.text)
+        self.assertIn('name="mes_num" data-month-select', response.text)
+        self.assertIn('data-months-by-year=', response.text)
+        self.assertNotIn('type="month"', response.text)
+        latest_closed = datetime.now().date().replace(day=1) - timedelta(days=1)
+        self.assertIn(f'<option value="{latest_closed.year}" selected>', response.text)
+        month_select = re.search(r'<select class="form-control management-select" name="mes_num" data-month-select>(.*?)</select>', response.text, re.S)
+        self.assertIsNotNone(month_select)
+        month_values = re.findall(r'<option value="(\d{2})"', month_select.group(1))
+        expected_months = [f"{month:02d}" for month in range(1, latest_closed.month + 1)]
+        self.assertEqual(month_values, expected_months)
+        self.assertNotIn(f"{datetime.now().month:02d}", month_values)
+
     def test_admin_can_open_customer_management(self):
         self._login("admin@example.test")
         response = self.client.get("/admin/clientes")
         self.assertEqual(response.status_code, 200)
+        self.assertIn('data-customer-view', response.text)
+        self.assertIn('data-customer-edit hidden', response.text)
+        self.assertIn('Alterar dados', response.text)
 
     def test_admin_customer_search_filters_by_name_email_and_phone(self):
         self._login("admin@example.test")
@@ -132,6 +164,7 @@ class SecurityRouteTests(unittest.TestCase):
             "phone": "",
             "password": "SenhaTeste-123",
             "confirm_password": "SenhaTeste-123",
+            **self._customer_form(name="Cliente Indevido", email="indevido@example.test"),
         })
         self.assertEqual(response.status_code, 303)
         db = self.app_module.get_db()
@@ -227,6 +260,7 @@ class SecurityRouteTests(unittest.TestCase):
             "token": raw_token,
             "new_password": "SenhaNova-456",
             "confirm_password": "SenhaNova-456",
+            **self._customer_form(name="Cadastro Duplicado", email="OUTRO@example.test", cpf="52998224725"),
         })
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/login?senha_redefinida=1")
@@ -488,22 +522,16 @@ class SecurityRouteTests(unittest.TestCase):
 
     def test_duplicate_email_on_customer_creation_does_not_create_account(self):
         self._login("admin@example.test")
-        response = self.client.post("/admin/clientes/novo", data={
-            "name": "Cadastro Duplicado",
-            "email": " OUTRO@example.test ",
-            "phone": "11988887777",
-            "password": "SenhaNova-456",
-            "confirm_password": "SenhaNova-456",
-        })
+        response = self.client.post("/admin/clientes/novo", data=self._customer_form(
+            name="Cadastro Duplicado", email="OUTRO@example.test", cpf="52998224725"))
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Já existe uma conta cadastrada com esse e-mail.", response.text)
+        self.assertIn("CPF ou e-mail", response.text)
 
         db = self.app_module.get_db()
-        rows = db.execute(
-            "SELECT id FROM users WHERE email=?", ("outro@example.test",)
-        ).fetchall()
+        rows = db.execute("SELECT id FROM users WHERE email=?", ("outro@example.test",)).fetchall()
         db.close()
         self.assertEqual(len(rows), 1)
+
 
     def test_customer_status_route_cannot_change_admin_or_barber_status(self):
         self._login("admin@example.test")
@@ -533,29 +561,17 @@ class SecurityRouteTests(unittest.TestCase):
                     "role": target["role"],
                 })
 
-    def test_new_customer_rejects_short_or_mismatched_password(self):
+    def test_new_customer_rejects_invalid_cpf(self):
         self._login("admin@example.test")
-        cases = [
-            ("short", "short", "A senha deve ter pelo menos 10 caracteres."),
-            ("SenhaNova-456", "diferente", "A confirmação da senha não confere."),
-        ]
-        for index, (password, confirmation, message) in enumerate(cases):
-            email = f"invalid-password-{index}@example.test"
-            with self.subTest(email=email):
-                response = self.client.post("/admin/clientes/novo", data={
-                    "name": "Cliente Inválido",
-                    "email": email,
-                    "phone": "",
-                    "password": password,
-                    "confirm_password": confirmation,
-                })
-                self.assertEqual(response.status_code, 200)
-                self.assertIn(message, response.text)
+        response = self.client.post("/admin/clientes/novo", data=self._customer_form(
+            email="cpf.invalido@example.test", cpf="111.111.111-11"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("CPF válido", response.text)
 
-                db = self.app_module.get_db()
-                row = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
-                db.close()
-                self.assertIsNone(row)
+        db = self.app_module.get_db()
+        row = db.execute("SELECT id FROM users WHERE email=?", ("cpf.invalido@example.test",)).fetchone()
+        db.close()
+        self.assertIsNone(row)
 
 
     def test_customer_edit_nonexistent_id_does_not_report_success(self):
@@ -698,6 +714,120 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/login")
         self.assertEqual(self.app_module.get_settings().get("shop_name"), before)
+
+    def test_admin_saves_smtp_settings_with_encrypted_password(self):
+        self._login("admin@example.test")
+        password = "SMTP-credencial-secreta-123"
+        response = self.client.post("/admin/configuracoes/smtp/salvar", data={
+            "smtp_enabled": "1", "smtp_host": "smtp.example.test", "smtp_port": "587",
+            "smtp_user": "remetente@example.test", "smtp_password": password,
+            "smtp_from": "BarberFlow <remetente@example.test>",
+            "app_base_url": "https://barberflow.example", "smtp_starttls": "1",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/admin/configuracoes?smtp_salvo=1")
+
+        db = self.app_module.get_db()
+        encrypted = db.execute(
+            "SELECT value FROM settings WHERE key='smtp_password_encrypted'"
+        ).fetchone()["value"]
+        from smtp_settings import get_smtp_config
+        config = get_smtp_config(db)
+        db.close()
+        self.assertNotEqual(encrypted, password)
+        self.assertNotIn(password, encrypted)
+        self.assertEqual(config["password"], password)
+        self.assertEqual(config["smtp_host"], "smtp.example.test")
+        self.assertNotIn("smtp_password_encrypted", self.app_module.get_settings())
+
+        page = self.client.get("/admin/configuracoes")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("Credencial salva", page.text)
+        self.assertNotIn(password, page.text)
+        self.assertNotIn(encrypted, page.text)
+
+        self.client.post("/admin/configuracoes/smtp/salvar", data={
+            "smtp_enabled": "1", "smtp_host": "smtp.example.test", "smtp_port": "587",
+            "smtp_user": "remetente@example.test", "smtp_from": "remetente@example.test",
+            "app_base_url": "https://barberflow.example", "smtp_security": "starttls",
+            "smtp_clear_password": "1",
+        })
+        db = self.app_module.get_db()
+        config = get_smtp_config(db)
+        db.close()
+        self.assertFalse(config["password_is_configured"])
+
+    def test_admin_can_send_smtp_test_message_without_real_delivery(self):
+        self._login("admin@example.test")
+        self.client.post("/admin/configuracoes/smtp/salvar", data={
+            "smtp_enabled": "1", "smtp_host": "smtp.example.test", "smtp_port": "587",
+            "smtp_user": "remetente@example.test", "smtp_password": "SMTP-credencial-teste",
+            "smtp_from": "remetente@example.test", "app_base_url": "https://barberflow.example",
+            "smtp_starttls": "1",
+        })
+        with patch("app.smtplib.SMTP") as smtp_factory:
+            response = self.client.post("/admin/configuracoes/smtp/testar", data={
+                "recipient": "teste@example.test",
+            })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/admin/configuracoes?smtp_teste=sucesso")
+        smtp = smtp_factory.return_value.__enter__.return_value
+        smtp.starttls.assert_called_once()
+        smtp.login.assert_called_once_with("remetente@example.test", "SMTP-credencial-teste")
+        smtp.send_message.assert_called_once()
+        message = smtp.send_message.call_args.args[0]
+        self.assertEqual(message["To"], "teste@example.test")
+
+    def test_admin_can_send_smtp_test_email_with_implicit_tls(self):
+        self._login("admin@example.test")
+        saved = self.client.post("/admin/configuracoes/smtp/salvar", data={
+            "smtp_enabled": "1", "smtp_host": "smtp.example.test", "smtp_port": "465",
+            "smtp_user": "remetente@example.test", "smtp_password": "SMTP-credencial-teste",
+            "smtp_from": "remetente@example.test", "app_base_url": "https://barberflow.example",
+            "smtp_security": "ssl",
+        })
+        self.assertEqual(saved.headers["location"], "/admin/configuracoes?smtp_salvo=1")
+        with patch("app.smtplib.SMTP_SSL") as smtp_factory:
+            response = self.client.post("/admin/configuracoes/smtp/testar", data={
+                "recipient": "teste@example.test",
+            })
+        self.assertEqual(response.headers["location"], "/admin/configuracoes?smtp_teste=sucesso")
+        smtp_factory.assert_called_once_with("smtp.example.test", 465, timeout=10)
+        smtp = smtp_factory.return_value.__enter__.return_value
+        smtp.starttls.assert_not_called()
+        smtp.login.assert_called_once_with("remetente@example.test", "SMTP-credencial-teste")
+        smtp.send_message.assert_called_once()
+
+    def test_smtp_settings_reject_http_public_url_without_persisting(self):
+        self._login("admin@example.test")
+        response = self.client.post("/admin/configuracoes/smtp/salvar", data={
+            "smtp_enabled": "1", "smtp_host": "smtp.example.test", "smtp_port": "587",
+            "smtp_user": "remetente@example.test", "smtp_password": "senha-teste",
+            "smtp_from": "remetente@example.test", "app_base_url": "http://barberflow.example",
+            "smtp_starttls": "1",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/admin/configuracoes?smtp_erro=url")
+        db = self.app_module.get_db()
+        row = db.execute("SELECT value FROM settings WHERE key='smtp_host'").fetchone()
+        db.close()
+        self.assertIsNone(row)
+
+    def test_barber_cannot_manage_smtp_settings_or_send_test_email(self):
+        self._login("barber@example.test")
+        saved = self.client.post("/admin/configuracoes/smtp/salvar", data={
+            "smtp_enabled": "1", "smtp_host": "smtp.example.test", "smtp_port": "587",
+            "smtp_from": "remetente@example.test", "app_base_url": "https://barberflow.example",
+        })
+        tested = self.client.post("/admin/configuracoes/smtp/testar", data={
+            "recipient": "teste@example.test",
+        })
+        self.assertEqual(saved.headers["location"], "/login")
+        self.assertEqual(tested.headers["location"], "/login")
+        db = self.app_module.get_db()
+        row = db.execute("SELECT value FROM settings WHERE key='smtp_host'").fetchone()
+        db.close()
+        self.assertIsNone(row)
 
     def test_barber_cannot_manage_barber_accounts(self):
         self._login("barber@example.test")
@@ -918,6 +1048,7 @@ class SecurityRouteTests(unittest.TestCase):
         allowed = self.client.get("/admin/financeiro")
         self.assertEqual(allowed.status_code, 200)
         self.assertIn("Entradas recebidas", allowed.text)
+        self.assertIn('class="form-card financial-entry-form"', allowed.text)
 
     def test_financial_transaction_uses_cents_and_updates_summary(self):
         self._login("admin@example.test")
@@ -946,6 +1077,24 @@ class SecurityRouteTests(unittest.TestCase):
         report = self.client.get("/admin/financeiro?inicio=2026-10-01&fim=2026-10-31")
         self.assertEqual(report.status_code, 200)
         self.assertIn("125.90", report.text)
+        self.assertIn("20/10/2026", report.text)
+
+    def test_financial_csv_formats_dates_as_day_month_year(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on, status)
+            VALUES ('income', 'Teste', 'Data brasileira', 1000, '2026-10-20', 'paid')
+        """)
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        response = self.client.get(
+            "/admin/financeiro/exportar.csv?inicio=2026-10-20&fim=2026-10-20"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("20/10/2026;Entrada;Teste;Data brasileira", response.text)
 
     def test_financial_transaction_rejects_invalid_amount(self):
         self._login("admin@example.test")
@@ -1830,23 +1979,75 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertIn("12.50", response.text)
         self.assertTrue(response.content.startswith(bytes([0xEF, 0xBB, 0xBF])))
 
-    def test_public_registration_rejects_password_shorter_than_10(self):
-        response = self.client.post("/cadastro", data={
-            "name": "Cadastro com senha curta",
-            "email": "senha.curta@example.test",
-            "phone": "",
-            "password": "Curta123",
+    def test_first_access_sends_unknown_cpf_to_customer_registration(self):
+        response = self.client.post("/primeiro-acesso", data={"cpf": "111.444.777-35"})
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/cadastro?cpf_nao_encontrado=1")
+
+    def test_first_access_sends_email_link_and_activates_customer_once(self):
+        self._login("admin@example.test")
+        created = self.client.post("/admin/clientes/novo", data=self._customer_form(
+            email="primeiro.acesso@example.test", cpf="52998224725"))
+        self.assertEqual(created.status_code, 303)
+        pending_login = self._login("primeiro.acesso@example.test", "SenhaCliente-456")
+        self.assertEqual(pending_login.status_code, 200)
+        self.assertIn("Primeiro acesso", pending_login.text)
+
+        env = {"APP_BASE_URL": "https://barberflow.example", "SMTP_HOST": "smtp.example.test",
+               "SMTP_FROM": "BarberFlow <noreply@example.test>"}
+        with patch.dict(os.environ, env), patch("security_routes.smtplib.SMTP") as smtp_factory:
+            response = self.client.post("/primeiro-acesso", data={"cpf": "529.982.247-25"})
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("o link será enviado", response.text)
+            smtp = smtp_factory.return_value.__enter__.return_value
+            smtp.send_message.assert_called_once()
+            message = smtp.send_message.call_args.args[0]
+            token_match = re.search(r"/criar-senha\?token=([^\s]+)", message.get_content())
+            self.assertIsNotNone(token_match)
+            token = token_match.group(1)
+
+        page = self.client.get("/criar-senha", params={"token": token})
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('name="new_password"', page.text)
+        changed = self.client.post("/criar-senha", data={
+            "token": token, "new_password": "SenhaCliente-456", "confirm_password": "SenhaCliente-456"
         })
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("senha com pelo menos 10 caracteres", response.text.lower())
+        self.assertEqual(changed.status_code, 303)
+        self.assertIn("senha_criada=1", changed.headers["location"])
 
         db = self.app_module.get_db()
-        row = db.execute(
-            "SELECT id FROM users WHERE email=?",
-            ("senha.curta@example.test",),
-        ).fetchone()
+        account = db.execute("SELECT first_access_required FROM users WHERE email=?",
+                             ("primeiro.acesso@example.test",)).fetchone()
+        db.close()
+        self.assertEqual(account["first_access_required"], 0)
+        self.assertEqual(self._login("primeiro.acesso@example.test", "SenhaCliente-456").status_code, 303)
+        reused = self.client.get("/criar-senha", params={"token": token})
+        self.assertNotIn('name="new_password"', reused.text)
+        self.assertIn("Solicite um novo link", reused.text)
+
+    def test_public_registration_requires_valid_cpf_and_full_customer_data(self):
+        response = self.client.post("/cadastro", data=self._customer_form(
+            name="Cadastro CPF inválido", email="cpf.publico@example.test", cpf="11111111111"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("CPF válido", response.text)
+        db = self.app_module.get_db()
+        row = db.execute("SELECT id FROM users WHERE email=?", ("cpf.publico@example.test",)).fetchone()
         db.close()
         self.assertIsNone(row)
+
+    def test_staff_customer_is_created_pending_first_access_without_password(self):
+        self._login("admin@example.test")
+        response = self.client.post("/admin/clientes/novo", data=self._customer_form(
+            email="pre.cadastro@example.test", cpf="52998224725"))
+        self.assertEqual(response.status_code, 303)
+        db = self.app_module.get_db()
+        row = db.execute("SELECT first_access_required, cpf, password_hash FROM users WHERE email=?",
+                         ("pre.cadastro@example.test",)).fetchone()
+        db.close()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["first_access_required"], 1)
+        self.assertEqual(row["cpf"], "52998224725")
+        self.assertNotEqual(row["password_hash"], "")
 
     def test_password_change_rejects_short_password_without_mutating_account(self):
         self._login("cliente@example.test")
@@ -1875,25 +2076,12 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(after["session_version"], 0)
         self.assertEqual(self.client.get("/minha-conta").status_code, 200)
 
-    def test_staff_customer_creation_rejects_password_shorter_than_10(self):
+    def test_staff_customer_pre_registration_rejects_duplicate_email(self):
         self._login("admin@example.test")
-        response = self.client.post("/admin/clientes/novo", data={
-            "name": "Cliente com senha curta",
-            "email": "cliente.senha.curta@example.test",
-            "phone": "",
-            "password": "Curta123",
-            "confirm_password": "Curta123",
-        })
+        response = self.client.post("/admin/clientes/novo", data=self._customer_form(
+            name="Cliente duplicado", email="outro@example.test", cpf="52998224725"))
         self.assertEqual(response.status_code, 200)
-        self.assertIn("pelo menos 10 caracteres", response.text)
-
-        db = self.app_module.get_db()
-        row = db.execute(
-            "SELECT id FROM users WHERE email=?",
-            ("cliente.senha.curta@example.test",),
-        ).fetchone()
-        db.close()
-        self.assertIsNone(row)
+        self.assertIn("CPF ou e-mail", response.text)
 
 
     def test_cross_origin_post_is_rejected_by_security_middleware(self):

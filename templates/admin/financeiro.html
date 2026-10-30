@@ -30,8 +30,8 @@
     {% endif %}
 
     <form method="GET" class="flex mb-4" style="gap:12px; flex-wrap:wrap;">
-      <label>De <input type="date" name="inicio" value="{{ inicio }}" required></label>
-      <label>Até <input type="date" name="fim" value="{{ fim }}" required></label>
+      <label>De <input type="date" lang="pt-BR" name="inicio" value="{{ inicio }}" required></label>
+      <label>Até <input type="date" lang="pt-BR" name="fim" value="{{ fim }}" required></label>
       <button class="btn btn-outline btn-sm" type="submit">Filtrar</button>
       <a class="btn btn-dourado btn-sm" href="/admin/financeiro/exportar.csv?inicio={{ inicio }}&fim={{ fim }}">Exportar CSV</a>
     </form>
@@ -46,19 +46,19 @@
     </div>
 
     <h3 style="color:var(--dourado); margin:28px 0 16px;">Novo lançamento</h3>
-    <form method="POST" action="/admin/financeiro/lancamento" class="form-card" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+    <form method="POST" action="/admin/financeiro/lancamento" class="form-card financial-entry-form">
       <label>Tipo
         <select name="transaction_type" required><option value="income">Entrada</option><option value="expense">Despesa</option></select>
       </label>
       <label>Categoria <input name="category" maxlength="80" required placeholder="Ex.: aluguel, produto, serviço"></label>
       <label>Descrição <input name="description" maxlength="240" required placeholder="Detalhes do lançamento"></label>
       <label>Valor (R$) <input name="amount" inputmode="decimal" required placeholder="0,00"></label>
-      <label>Data <input type="date" name="occurred_on" value="{{ fim }}" required></label>
+      <label>Data <input type="date" lang="pt-BR" name="occurred_on" value="{{ fim }}" required></label>
       <label>Forma de pagamento <input name="payment_method" maxlength="40" placeholder="Pix, dinheiro, cartão..."></label>
       <label>Status
         <select name="status" required><option value="paid">Pago/recebido</option><option value="pending">Pendente</option><option value="cancelled">Cancelado</option></select>
       </label>
-      <div style="align-self:end"><button class="btn btn-dourado" type="submit">Salvar lançamento</button></div>
+      <div class="financial-entry-submit"><button class="btn btn-dourado" type="submit">Salvar lançamento</button></div>
     </form>
 
     <p class="text-muted">Custo e margem da loja são estimativas: dependem dos custos cadastrados e do histórico de vendas a partir da implantação. Produtos antigos sem custo registrado podem aparecer com custo zero.</p>
@@ -69,7 +69,7 @@
       <div class="form-card" style="display:grid;gap:16px;">
       {% for m in monthly %}
         <div>
-          <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;"><strong>{{ m.month }}</strong><span>Entradas R$ {{ "%.2f"|format(m.income_cents / 100) }} · Despesas R$ {{ "%.2f"|format(m.expense_cents / 100) }}</span></div>
+          <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;"><strong>{{ m.month[5:7] }}/{{ m.month[:4] }}</strong><span>Entradas R$ {{ "%.2f"|format(m.income_cents / 100) }} · Despesas R$ {{ "%.2f"|format(m.expense_cents / 100) }}</span></div>
           <div style="height:12px;background:var(--cinza-claro, #e5e7eb);border-radius:6px;overflow:hidden;margin-top:6px;"><div title="Entradas" style="height:100%;width:{{ (m.income_cents / max_month_value * 100) }}%;background:var(--dourado, #b8860b);"></div></div>
           <div style="height:6px;background:var(--cinza-claro, #e5e7eb);border-radius:6px;overflow:hidden;margin-top:4px;"><div title="Despesas" style="height:100%;width:{{ (m.expense_cents / max_month_value * 100) }}%;background:#64748b;"></div></div>
         </div>
@@ -125,7 +125,7 @@
       <tbody>
       {% for t in transactions %}
         <tr>
-          <td>{{ t.occurred_on }}</td>
+          <td>{{ t.occurred_on|date_br }}</td>
           <td>{{ "Entrada" if t.transaction_type == "income" else "Despesa" }}</td>
           <td>{{ t.category }}<br><small class="text-muted">{{ t.description }}</small></td>
           <td>{{ t.payment_method or "—" }}</td>

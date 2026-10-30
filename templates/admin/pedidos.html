@@ -10,6 +10,7 @@
     <a href="/admin/portfolio">📸 Portfólio</a>
     <a href="/admin/barbeiros">👤 Barbeiros</a>
     <a href="/admin/pedidos" class="active">📦 Pedidos</a>
+    {% if user.role == "admin" %}<a href="/admin/financeiro">💰 Financeiro</a>{% endif %}
     <a href="/app" target="_blank">📱 App Mobile</a>
     <a href="/admin/configuracoes">⚙️ Configurações</a>
     <a href="/">🌐 Ver Site</a>
@@ -34,7 +35,7 @@
       <tbody>
         {% for o in orders %}
         <tr>
-          <td><strong>#{{ o.id }}</strong><br><small class="text-muted">{{ o.created_at[:16] }}</small></td>
+          <td><strong>#{{ o.id }}</strong><br><small class="text-muted">{{ o.created_at[:10]|date_br }} {{ o.created_at[11:16] }}</small></td>
           <td>{{ o.customer_name }}<br><small class="text-muted">{{ o.customer_phone }}</small></td>
           <td style="max-width:200px;"><small>{{ o.items_summary }}</small></td>
           <td class="text-dourado">R$ {{ "%.2f"|format(o.total) }}</td>

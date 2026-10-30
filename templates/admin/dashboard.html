@@ -19,7 +19,7 @@
 
   <div class="admin-content">
     <h1>Painel do Barbeiro</h1>
-    <p class="text-muted mb-4">Olá, {{ user.name }}! Hoje é {{ today }}.</p>
+    <p class="text-muted mb-4">Olá, {{ user.name }}! Hoje é {{ today|date_br }}.</p>
 
     <div class="stat-grid">
       <div class="stat-card">
@@ -45,17 +45,24 @@
     </div>
 
     {% if user.role == "admin" and management %}
-    <section class="form-card" style="margin:24px 0;">
+    <section class="form-card management-panel" style="margin:24px 0;">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
         <div>
           <h2 style="margin:0;color:var(--dourado);">Visão gerencial</h2>
           <p class="text-muted" style="margin:6px 0 0;">Indicadores financeiros do mês selecionado e situação atual do estoque.</p>
         </div>
-        <form method="GET" action="/admin" style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
-          <label>Mês de referência
-            <input type="month" name="mes" value="{{ selected_month }}" required>
+        <form method="GET" action="/admin" class="management-month-form" data-months-by-year='{{ available_months_by_year|tojson }}'>
+          <label class="management-month-label">Ano
+            <select class="form-control management-select" name="ano" data-year-select>
+              {% for year in available_years %}<option value="{{ year }}" {% if year == selected_year %}selected{% endif %}>{{ year }}</option>{% endfor %}
+            </select>
           </label>
-          <button class="btn btn-dourado btn-sm" type="submit">Atualizar painel</button>
+          <label class="management-month-label">Mês
+            <select class="form-control management-select" name="mes_num" data-month-select>
+              {% for month in available_months %}<option value="{{ month.value }}" {% if month.value == selected_month_num %}selected{% endif %}>{{ month.label }}</option>{% endfor %}
+            </select>
+          </label>
+          <button class="btn btn-dourado btn-sm management-submit" type="submit">Atualizar painel</button>
         </form>
       </div>
       <div class="stat-grid" style="margin-top:18px;">
@@ -121,6 +128,25 @@
 {% endblock %}
 {% block scripts %}
 <script>
+  const monthForm = document.querySelector(".management-month-form");
+  if (monthForm) {
+    const monthsByYear = JSON.parse(monthForm.dataset.monthsByYear || "{}");
+    const yearSelect = monthForm.querySelector("[data-year-select]");
+    const monthSelect = monthForm.querySelector("[data-month-select]");
+    yearSelect.addEventListener("change", () => {
+      const previousMonth = monthSelect.value;
+      const options = monthsByYear[yearSelect.value] || [];
+      monthSelect.replaceChildren(...options.map((month) => {
+        const option = document.createElement("option");
+        option.value = month.value;
+        option.textContent = month.label;
+        return option;
+      }));
+      if (options.some((month) => month.value === previousMonth)) monthSelect.value = previousMonth;
+      else if (options.length) monthSelect.value = options[options.length - 1].value;
+    });
+  }
+
 async function updateStatus(id, status) {
   await fetch('/admin/agenda/status', {
     method:'POST', headers:{'Content-Type':'application/json'},

@@ -4,6 +4,7 @@ Formato do hash: pbkdf2$<iterations>$<salt_hex>$<hash_hex>
 """
 import hashlib
 import secrets
+from datetime import date
 
 ITERATIONS = 600_000
 # Limite superior defensivo: o custo de verificação vem de um valor armazenado
@@ -40,4 +41,31 @@ def verify_password(password: str, stored: str) -> bool:
         ).hex()
         return secrets.compare_digest(calc, pw_hash.lower())
     except (AttributeError, TypeError, ValueError, UnicodeError, OverflowError):
+        return False
+
+
+def normalize_cpf(value: str) -> str:
+    """Mantém somente os dígitos de um CPF."""
+    return "".join(char for char in (value or "") if char.isdigit())
+
+
+def valid_cpf(value: str) -> bool:
+    """Valida formato e dígitos verificadores do CPF."""
+    cpf = normalize_cpf(value)
+    if len(cpf) != 11 or cpf == cpf[0] * 11:
+        return False
+    for length in (9, 10):
+        total = sum(int(cpf[i]) * (length + 1 - i) for i in range(length))
+        digit = (total * 10 % 11) % 10
+        if digit != int(cpf[length]):
+            return False
+    return True
+
+
+def valid_birth_date(value: str) -> bool:
+    """Aceita data ISO válida, sem datas futuras."""
+    try:
+        parsed = date.fromisoformat(value or "")
+        return parsed <= date.today()
+    except (TypeError, ValueError):
         return False

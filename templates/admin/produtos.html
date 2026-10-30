@@ -10,6 +10,7 @@
     <a href="/admin/portfolio">📸 Portfólio</a>
     <a href="/admin/barbeiros">👤 Barbeiros</a>
     <a href="/admin/pedidos">📦 Pedidos</a>
+    {% if user.role == "admin" %}<a href="/admin/financeiro">💰 Financeiro</a>{% endif %}
     <a href="/app" target="_blank">📱 App Mobile</a>
     <a href="/admin/configuracoes">⚙️ Configurações</a>
     <a href="/">🌐 Ver Site</a>
@@ -18,6 +19,8 @@
 
   <div class="admin-content">
     <h1>Gerenciar Produtos da Loja</h1>
+    {% if request.query_params.get('salvo') %}<div class="success-msg">Produto salvo com sucesso.</div>{% endif %}
+    {% if request.query_params.get('imagem_erro') == 'tamanho' %}<div class="error-msg">A imagem deve ter no máximo 3 MB.</div>{% elif request.query_params.get('imagem_erro') == 'formato' %}<div class="error-msg">Envie uma imagem PNG, JPG ou WebP.</div>{% elif request.query_params.get('erro') == 'imagem' %}<div class="error-msg">Informe um link público válido para a imagem.</div>{% endif %}
 
     <button class="btn btn-dourado btn-sm mb-4" onclick="openModal()">+ Novo Produto</button>
 
@@ -81,7 +84,7 @@
   <div class="modal">
     <button class="modal-close" onclick="closeModal()">✕</button>
     <h3 id="modal-title">Novo Produto</h3>
-    <form method="POST" action="/admin/produtos/salvar">
+    <form method="POST" action="/admin/produtos/salvar" enctype="multipart/form-data">
       <input type="hidden" name="product_id" id="f_id">
       <div class="form-group">
         <label>Nome do produto</label>
@@ -113,8 +116,10 @@
         </select>
       </div>
       <div class="form-group">
-        <label>URL da imagem (opcional)</label>
-        <input type="url" name="image_url" id="f_img" class="form-control" placeholder="https://...">
+        <label>Imagem do produto por link (opcional)</label>
+        <input type="text" name="image_url" id="f_img" class="form-control" placeholder="https://site.com/imagem.png">
+        <small class="text-muted">Ou envie do computador: PNG, JPG ou WebP, até 3 MB. O arquivo enviado substitui o link.</small>
+        <input type="file" name="image_file" id="f_image_file" class="form-control" accept="image/png,image/jpeg,image/webp">
       </div>
       <button type="submit" class="btn btn-dourado btn-block">Salvar</button>
     </form>
@@ -128,7 +133,7 @@
     <tbody>
       {% for m in movements %}
       <tr>
-        <td>{{ m.created_at }}</td><td>{{ m.product_name }}</td>
+        <td>{{ m.created_at[:10]|date_br }} {{ m.created_at[11:16] }}</td><td>{{ m.product_name }}</td>
         <td>{{ {'opening':'Saldo inicial','purchase':'Entrada/compra','sale':'Venda','adjustment':'Ajuste','return':'Devolução'}.get(m.movement_type, m.movement_type) }}</td>
         <td>{% if m.quantity > 0 %}+{% endif %}{{ m.quantity }}</td>
         <td>R$ {{ "%.2f"|format(m.unit_cost_cents / 100) }}</td>
@@ -146,6 +151,7 @@
 function openModal() {
   document.getElementById('modal-title').textContent = 'Novo Produto';
   ['f_id','f_name','f_desc','f_price','f_img'].forEach(i => document.getElementById(i).value = '');
+  document.getElementById('f_image_file').value = '';
   document.getElementById('f_stock').value = '10';
   document.getElementById('f_cost').value = '0';
   document.getElementById('modal').classList.add('open');
@@ -161,6 +167,7 @@ function editProduct(p) {
   document.getElementById('f_stock').value = p.stock;
   document.getElementById('f_cat').value = p.category;
   document.getElementById('f_img').value = p.image_url || '';
+  document.getElementById('f_image_file').value = '';
   document.getElementById('modal').classList.add('open');
 }
 document.getElementById('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });

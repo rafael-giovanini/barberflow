@@ -15,9 +15,9 @@
     </div>
     <button type="submit" class="btn btn-dourado btn-block">Entrar</button>
   </form>
-  <p class="text-center mt-2 text-muted">
-    Não tem conta? <a href="/cadastro">Cadastre-se grátis</a>
-  </p>
+  {% if request.query_params.get('senha_criada') %}<div class="success-msg">Senha criada. Você já pode entrar.</div>{% endif %}
+  <p class="text-center mt-2 text-muted"><a href="/primeiro-acesso">Primeiro acesso? Crie sua senha</a></p>
+  <p class="text-center mt-2 text-muted">Ainda não tem cadastro? <a href="/cadastro">Cadastre seus dados</a></p>
   <p class="text-center mt-2 text-muted"><a href="/esqueci-senha">Esqueci minha senha</a></p>
 </div>
 {% endblock %}
