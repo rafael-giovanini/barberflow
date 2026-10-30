@@ -7,3 +7,5 @@ __pycache__/
 .env.local
 *.log
 .DS_Store
+# Logos enviados localmente (em Docker, ficam no volume persistente)
+uploads/

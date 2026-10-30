@@ -3,36 +3,142 @@ Sistema de Barbearia - Aplicação Principal
 FastAPI + SQLite + Templates Jinja2
 """
 import json
-from datetime import datetime, timedelta
+import os
+import secrets
+from pathlib import Path
+import sqlite3
+import smtplib
+from email.message import EmailMessage
+from email.utils import parseaddr
+from datetime import date, datetime, timedelta
 from typing import Optional
 
-from fastapi import FastAPI, Request, Form, HTTPException, Depends, Response
+from fastapi import FastAPI, Request, Form, File, UploadFile, HTTPException, Depends, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from itsdangerous import URLSafeTimedSerializer
 
-from database import init_db, get_db, get_settings
-from auth import hash_password, verify_password
+from database import DB_PATH, init_db, get_db, get_settings
+from auth import hash_password, verify_password, normalize_cpf, valid_cpf, valid_birth_date
+from smtp_settings import get_smtp_config, public_smtp_settings, validate_smtp_form, save_smtp_settings
 
 # Inicializa banco
 init_db()
 
 app = FastAPI(title="Sistema de Barbearia")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+LOGO_UPLOAD_DIR = Path(DB_PATH).resolve().parent / "uploads"
+LOGO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(LOGO_UPLOAD_DIR)), name="uploads")
+MAX_LOGO_SIZE = 3 * 1024 * 1024
 templates = Jinja2Templates(directory="templates")
+
+
+async def persist_image_upload(image_upload: UploadFile):
+    """Guarda uma imagem enviada em armazenamento persistente e retorna URL local e caminho."""
+    image_data = await image_upload.read(MAX_LOGO_SIZE + 1)
+    if len(image_data) > MAX_LOGO_SIZE:
+        return None, None, "tamanho"
+    if image_data.startswith(b"\x89PNG\r\n\x1a\n"):
+        extension = "png"
+    elif image_data.startswith(b"\xff\xd8\xff"):
+        extension = "jpg"
+    elif len(image_data) >= 12 and image_data[:4] == b"RIFF" and image_data[8:12] == b"WEBP":
+        extension = "webp"
+    else:
+        return None, None, "formato"
+    filename = f"image-{secrets.token_hex(16)}.{extension}"
+    path = LOGO_UPLOAD_DIR / filename
+    path.write_bytes(image_data)
+    return f"/uploads/{filename}", path, None
+
+
+def remove_uploaded_image(image_url):
+    """Remove apenas arquivos gerados pelo sistema dentro da pasta de uploads."""
+    if not image_url or not image_url.startswith("/uploads/"):
+        return
+    filename = image_url.removeprefix("/uploads/")
+    image_path = (LOGO_UPLOAD_DIR / filename).resolve()
+    if image_path.parent == LOGO_UPLOAD_DIR.resolve() and filename.startswith(("logo-", "image-")):
+        image_path.unlink(missing_ok=True)
+
+
+def is_stored_image_url(image_url):
+    """Confirma que uma URL local aponta para uma imagem armazenada pelo sistema."""
+    if not image_url or not image_url.startswith("/uploads/"):
+        return False
+    filename = image_url.removeprefix("/uploads/")
+    image_path = (LOGO_UPLOAD_DIR / filename).resolve()
+    return (image_path.parent == LOGO_UPLOAD_DIR.resolve()
+            and filename.startswith(("logo-", "image-"))
+            and image_path.suffix.lower() in {".png", ".jpg", ".webp"}
+            and image_path.is_file())
+
+
+def format_date_br(value):
+    """Formata datas ISO para exibição brasileira sem alterar valores internos."""
+    if not value:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%d/%m/%Y")
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).strftime("%d/%m/%Y")
+    except ValueError:
+        try:
+            return datetime.strptime(str(value)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+        except ValueError:
+            return str(value)
+
+
+templates.env.filters["date_br"] = format_date_br
 import json as _json
 templates.env.filters["from_json"] = lambda s: _json.loads(s) if s else []
 
 
 @app.middleware("http")
 async def inject_settings(request: Request, call_next):
-    """Injeta as configurações (cores, nome, logo) em todas as páginas."""
+    """Injeta configurações e aplica validações defensivas globais."""
     request.state.settings = get_settings()
+
+    # Rejeita POSTs com Origin explicitamente externo; complementa SameSite=Lax.
+    # Requisições sem Origin (ex.: clientes de teste/integrações) seguem o fluxo normal.
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        origin = request.headers.get("origin")
+        if origin:
+            from urllib.parse import urlsplit
+            origin_parts = urlsplit(origin)
+            request_host = request.headers.get("host", "").lower()
+            origin_host = (origin_parts.netloc or "").lower()
+            if not origin_parts.scheme or not origin_host or origin_host != request_host:
+                response = JSONResponse({"detail": "Origem da requisição não permitida."}, status_code=403)
+                response.headers["X-Content-Type-Options"] = "nosniff"
+                response.headers["X-Frame-Options"] = "DENY"
+                response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+                response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+                response.headers["Cache-Control"] = "no-store"
+                if IS_PRODUCTION:
+                    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+                return response
+
     response = await call_next(request)
+    # Cabeçalhos defensivos aplicados também a respostas de erro e redirecionamentos.
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault("Cache-Control", "no-store")
+    if IS_PRODUCTION:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response
 
-SECRET_KEY = "troque-esta-chave-por-uma-secreta-sua-2024"
+# Em desenvolvimento, a chave aleatória evita um segredo fixo no código.
+# Em produção, defina SECRET_KEY com um valor aleatório persistente no ambiente.
+IS_PRODUCTION = os.getenv("ENVIRONMENT", "development").strip().lower() == "production"
+_configured_secret = os.getenv("SECRET_KEY", "").strip()
+if IS_PRODUCTION and len(_configured_secret) < 32:
+    raise RuntimeError("Em produção, configure SECRET_KEY com pelo menos 32 caracteres aleatórios.")
+SECRET_KEY = _configured_secret or secrets.token_urlsafe(48)
 serializer = URLSafeTimedSerializer(SECRET_KEY)
 
 COOKIE_NAME = "barbearia_session"
@@ -41,8 +147,22 @@ CART_COOKIE = "barbearia_cart"
 
 # ---------- Helpers de autenticação ----------
 def set_session(response, user_id: int, role: str, name: str):
-    token = serializer.dumps({"user_id": user_id, "role": role, "name": name})
-    response.set_cookie(COOKIE_NAME, token, httponly=True, max_age=86400 * 30)
+    db = get_db()
+    row = db.execute(
+        "SELECT session_version, active FROM users WHERE id=?", (user_id,)
+    ).fetchone()
+    db.close()
+    if not row or not row["active"]:
+        return
+    token = serializer.dumps({
+        "user_id": user_id, "role": role, "name": name,
+        "session_version": row["session_version"],
+    })
+    response.set_cookie(
+        COOKIE_NAME, token, httponly=True, max_age=86400 * 30,
+        secure=IS_PRODUCTION or os.getenv("COOKIE_SECURE", "0").lower() in ("1", "true", "yes"),
+        samesite="lax",
+    )
 
 
 def get_current_user(request: Request):
@@ -51,6 +171,19 @@ def get_current_user(request: Request):
         return None
     try:
         data = serializer.loads(token, max_age=86400 * 30)
+        # Sessões antigas ou revogadas deixam de ser aceitas após troca de senha
+        # ou desativação da conta.
+        db = get_db()
+        row = db.execute(
+            "SELECT role, name, active, session_version FROM users WHERE id=?",
+            (data.get("user_id"),),
+        ).fetchone()
+        db.close()
+        if (not row or not row["active"]
+                or data.get("session_version") != row["session_version"]):
+            return None
+        data["role"] = row["role"]
+        data["name"] = row["name"]
         return data
     except Exception:
         return None
@@ -71,13 +204,27 @@ def require_admin(request: Request):
 
 
 def get_cart(request: Request):
-    """Lê carrinho do cookie (lista de {product_id, qty})."""
+    """Lê e normaliza o carrinho não confiável armazenado no cookie do navegador."""
     raw = request.cookies.get(CART_COOKIE)
     if not raw:
         return []
     try:
-        return json.loads(raw)
-    except Exception:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            return []
+        normalized = {}
+        for item in parsed[:50]:
+            if not isinstance(item, dict):
+                continue
+            try:
+                product_id = int(item.get("product_id"))
+                qty = int(item.get("qty"))
+            except (TypeError, ValueError):
+                continue
+            if product_id > 0 and 1 <= qty <= 20:
+                normalized[product_id] = min(20, normalized.get(product_id, 0) + qty)
+        return [{"product_id": pid, "qty": qty} for pid, qty in normalized.items()]
+    except (ValueError, TypeError):
         return []
 
 
@@ -129,13 +276,21 @@ def portfolio_page(request: Request):
 
 @app.get("/agendar", response_class=HTMLResponse)
 def agendar_page(request: Request):
+    user = get_current_user(request)
     db = get_db()
     services = db.execute("SELECT * FROM services WHERE active=1 ORDER BY price").fetchall()
     barbers = db.execute("SELECT * FROM barbers WHERE active=1").fetchall()
-    user = get_current_user(request)
+    customers = []
+    if user and user.get("role") in ("admin", "barber"):
+        customers = db.execute("""
+            SELECT id, name, phone, cpf FROM users
+            WHERE active=1 AND role='customer'
+            ORDER BY name COLLATE NOCASE
+        """).fetchall()
     db.close()
     return templates.TemplateResponse("agendar.html", {
         "request": request, "user": user, "services": services, "barbers": barbers,
+        "customers": customers,
     })
 
 
@@ -176,28 +331,71 @@ def carrinho(request: Request):
 # ---------- Auth ----------
 @app.get("/cadastro", response_class=HTMLResponse)
 def cadastro_page(request: Request):
-    return templates.TemplateResponse("cadastro.html", {"request": request, "user": None, "error": None})
+    return templates.TemplateResponse("cadastro.html", {
+        "request": request, "user": None, "error": None, "values": {}, "created": False,
+        "today": date.today().isoformat()
+    })
 
 
-@app.post("/cadastro")
-def cadastro(request: Request, name: str = Form(...), email: str = Form(...),
-             phone: str = Form(""), password: str = Form(...)):
-    db = get_db()
-    existing = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
-    if existing:
-        db.close()
+@app.post("/cadastro", response_class=HTMLResponse)
+def cadastro(
+    request: Request, name: str = Form(...), email: str = Form(...), phone: str = Form(...),
+    cpf: str = Form(...), birth_date: str = Form(...), zip_code: str = Form(...),
+    address: str = Form(...), address_number: str = Form(...),
+    address_complement: str = Form(""), neighborhood: str = Form(...),
+    city: str = Form(...), state: str = Form(...)
+):
+    name, email = name.strip(), email.strip().lower()
+    phone, cpf = phone.strip(), normalize_cpf(cpf)
+    zip_code = "".join(ch for ch in zip_code if ch.isdigit())
+    address, address_number = address.strip(), address_number.strip()
+    address_complement = address_complement.strip()
+    neighborhood, city, state = neighborhood.strip(), city.strip(), state.strip().upper()
+    values = {
+        "name": name, "email": email, "phone": phone, "cpf": cpf,
+        "birth_date": birth_date, "zip_code": zip_code, "address": address,
+        "address_number": address_number, "address_complement": address_complement,
+        "neighborhood": neighborhood, "city": city, "state": state,
+    }
+    error = None
+    if not name or len(name) > 120 or "@" not in email:
+        error = "Informe nome completo e e-mail válidos."
+    elif not valid_cpf(cpf):
+        error = "Informe um CPF válido."
+    elif len(phone) < 10 or len(zip_code) != 8 or not address or not address_number or not neighborhood or not city or len(state) != 2:
+        error = "Preencha telefone e endereço completos."
+    elif not valid_birth_date(birth_date):
+        error = "Informe uma data de nascimento válida, que não esteja no futuro."
+    if error:
         return templates.TemplateResponse("cadastro.html", {
-            "request": request, "user": None, "error": "Este e-mail já está cadastrado."
+            "request": request, "user": None, "error": error, "values": values, "created": False,
+            "today": date.today().isoformat()
         })
-    pw_hash = hash_password(password)
-    cur = db.execute("INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
-                     (name, email, phone, pw_hash, "customer"))
-    db.commit()
-    user_id = cur.lastrowid
-    db.close()
-    resp = RedirectResponse(url="/area-cliente", status_code=303)
-    set_session(resp, user_id, "customer", name)
-    return resp
+
+    db = get_db()
+    try:
+        db.execute("""
+            INSERT INTO users
+                (name, email, phone, cpf, birth_date, zip_code, address, address_number,
+                 address_complement, neighborhood, city, state, password_hash,
+                 first_access_required, role)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'customer')
+        """, (name, email, phone, cpf, birth_date, zip_code, address, address_number,
+              address_complement, neighborhood, city, state, hash_password(secrets.token_urlsafe(32))))
+        db.commit()
+    except sqlite3.IntegrityError:
+        db.rollback()
+        error = "Já existe uma conta com este CPF ou e-mail. Se você já tem cadastro, use Primeiro acesso."
+        return templates.TemplateResponse("cadastro.html", {
+            "request": request, "user": None, "error": error, "values": values, "created": False,
+            "today": date.today().isoformat()
+        }, status_code=409)
+    finally:
+        db.close()
+    return templates.TemplateResponse("cadastro.html", {
+        "request": request, "user": None, "error": None, "values": {}, "created": True,
+        "today": date.today().isoformat()
+    })
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -207,12 +405,58 @@ def login_page(request: Request):
 
 @app.post("/login")
 def login(request: Request, email: str = Form(...), password: str = Form(...)):
+    normalized_email = email.strip().lower()
+    client_ip = request.client.host if request.client else "unknown"
+    now = datetime.utcnow()
+    window_start = (now - timedelta(minutes=15)).isoformat()
+
     db = get_db()
-    user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
-    db.close()
-    if not user or not verify_password(password, user["password_hash"]):
+    # Limite persistente no SQLite: continua funcionando entre reinicializações.
+    attempts = db.execute("""
+        SELECT COUNT(*) AS total FROM auth_login_attempts
+        WHERE email=? AND client_ip=? AND attempted_at >= ? AND succeeded=0
+    """, (normalized_email, client_ip, window_start)).fetchone()["total"]
+    if attempts >= 10:
+        db.close()
         return templates.TemplateResponse("login.html", {
-            "request": request, "user": None, "error": "E-mail ou senha inválidos."
+            "request": request, "user": None,
+            "error": "Muitas tentativas de acesso. Aguarde 15 minutos e tente novamente."
+        }, status_code=429)
+
+    user = db.execute("SELECT * FROM users WHERE email=?", (normalized_email,)).fetchone()
+    valid = bool(user and user["active"] and not user["first_access_required"]
+                 and verify_password(password, user["password_hash"]))
+    if valid:
+        # Atualiza hashes legados no próximo login válido, sem exigir redefinição
+        # de senha nem invalidar a sessão recém-criada.
+        try:
+            stored_iterations = int(user["password_hash"].split("$", 3)[1])
+        except (IndexError, TypeError, ValueError):
+            stored_iterations = 0
+        if stored_iterations < 600_000:
+            upgraded_hash = hash_password(password)
+            db.execute("UPDATE users SET password_hash=? WHERE id=?",
+                       (upgraded_hash, user["id"]))
+    db.execute(
+        "INSERT INTO auth_login_attempts (email, client_ip, attempted_at, succeeded) VALUES (?, ?, ?, ?)",
+        (normalized_email, client_ip, now.isoformat(), 1 if valid else 0),
+    )
+    if valid:
+        # Um login válido remove falhas anteriores para não manter o usuário bloqueado.
+        db.execute("DELETE FROM auth_login_attempts WHERE email=? AND client_ip=? AND succeeded=0",
+                   (normalized_email, client_ip))
+    # Limpeza limitada para impedir crescimento indefinido da tabela de tentativas.
+    db.execute("DELETE FROM auth_login_attempts WHERE attempted_at < ?",
+               ((now - timedelta(days=7)).isoformat(),))
+    db.commit()
+    db.close()
+
+    if not valid:
+        error = "E-mail ou senha inválidos."
+        if user and user["active"] and user["first_access_required"]:
+            error = "Sua conta ainda não foi ativada. Use Primeiro acesso para criar sua senha."
+        return templates.TemplateResponse("login.html", {
+            "request": request, "user": None, "error": error
         })
     resp = RedirectResponse(url="/admin" if user["role"] in ("admin", "barber") else "/area-cliente", status_code=303)
     set_session(resp, user["id"], user["role"], user["name"])
@@ -313,37 +557,70 @@ async def api_agendar(request: Request):
     user = get_current_user(request)
     if not user:
         return JSONResponse({"ok": False, "error": "Faça login para agendar"}, status_code=401)
-    data = await request.json()
-    db = get_db()
-    service = db.execute("SELECT duration_min FROM services WHERE id=?", (data["service_id"],)).fetchone()
-    if not service:
-        db.close()
-        return JSONResponse({"ok": False, "error": "Serviço inválido"})
-    start = datetime.strptime(data["start_time"], "%H:%M")
-    end = start + timedelta(minutes=service["duration_min"])
-    # Verifica conflito
-    conflict = db.execute("""
-        SELECT id FROM appointments WHERE barber_id=? AND appointment_date=? AND status='scheduled'
-        AND NOT (end_time <= ? OR start_time >= ?)
-    """, (data["barber_id"], data["date"], data["start_time"], end.strftime("%H:%M"))).fetchone()
-    if conflict:
-        db.close()
-        return JSONResponse({"ok": False, "error": "Horário já reservado, escolha outro."})
-    db.execute("""
-        INSERT INTO appointments (user_id, barber_id, service_id, appointment_date, start_time, end_time, notes)
-        VALUES (?,?,?,?,?,?,?)
-    """, (user["user_id"], data["barber_id"], data["service_id"], data["date"],
-          data["start_time"], end.strftime("%H:%M"), data.get("notes", "")))
-    db.commit()
-    db.close()
-    # Notifica o barbeiro no WhatsApp (se configurado)
     try:
-        parts = data["date"].split("-")
-        msg = (f"🔔 NOVO AGENDAMENTO!\n"
-               f"Cliente: {user['name']}\n"
-               f"Data: {parts[2]}/{parts[1]}/{parts[0]} às {data['start_time']}\n"
-               f"Serviço: ID {data['service_id']}\n"
-               f"Obs: {data.get('notes','-')}")
+        data = await request.json()
+        barber_id = int(data["barber_id"])
+        service_id = int(data["service_id"])
+        customer_id = int(data["customer_id"]) if data.get("customer_id") not in (None, "") else None
+        appointment_date = datetime.strptime(str(data["date"]), "%Y-%m-%d").date()
+        start = datetime.strptime(str(data["start_time"]), "%H:%M")
+        notes = str(data.get("notes", "")).strip()[:500]
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Dados de agendamento inválidos."}, status_code=400)
+    if appointment_date < datetime.now().date():
+        return JSONResponse({"ok": False, "error": "Não é possível agendar no passado."}, status_code=400)
+    db = get_db()
+    try:
+        barber = db.execute("SELECT * FROM barbers WHERE id=? AND active=1", (barber_id,)).fetchone()
+        service = db.execute("SELECT duration_min, price FROM services WHERE id=? AND active=1", (service_id,)).fetchone()
+        if not barber or not service:
+            return JSONResponse({"ok": False, "error": "Barbeiro ou serviço indisponível."}, status_code=400)
+        booking_user = user
+        if user.get("role") in ("admin", "barber"):
+            if not customer_id:
+                return JSONResponse({"ok": False, "error": "Selecione o cliente do agendamento."}, status_code=400)
+            booking_user = db.execute("""
+                SELECT id AS user_id, name, phone FROM users
+                WHERE id=? AND active=1 AND role='customer'
+            """, (customer_id,)).fetchone()
+            if not booking_user:
+                return JSONResponse({"ok": False, "error": "Cliente indisponível para agendamento."}, status_code=400)
+        end = start + timedelta(minutes=service["duration_min"])
+        work_days = json.loads(barber["work_days"] or "[]")
+        if appointment_date.isoweekday() not in work_days:
+            return JSONResponse({"ok": False, "error": "O barbeiro não atende nesta data."}, status_code=400)
+        work_start = datetime.strptime(barber["work_start"], "%H:%M")
+        work_end = datetime.strptime(barber["work_end"], "%H:%M")
+        lunch_start = datetime.strptime(barber["lunch_start"], "%H:%M")
+        lunch_end = datetime.strptime(barber["lunch_end"], "%H:%M")
+        if (start < work_start or end > work_end or
+                (start < lunch_end and end > lunch_start) or start.minute not in (0, 30)):
+            return JSONResponse({"ok": False, "error": "Horário fora da agenda de atendimento."}, status_code=400)
+        if appointment_date == datetime.now().date() and start.time() <= datetime.now().time():
+            return JSONResponse({"ok": False, "error": "Não é possível agendar um horário passado."}, status_code=400)
+        db.execute("BEGIN IMMEDIATE")
+        conflict = db.execute("""
+            SELECT id FROM appointments WHERE barber_id=? AND appointment_date=? AND status='scheduled'
+            AND NOT (end_time <= ? OR start_time >= ?)
+        """, (barber_id, appointment_date.isoformat(), start.strftime("%H:%M"), end.strftime("%H:%M"))).fetchone()
+        if conflict:
+            db.rollback()
+            return JSONResponse({"ok": False, "error": "Horário já reservado, escolha outro."}, status_code=409)
+        db.execute("""
+            INSERT INTO appointments (user_id, barber_id, service_id, appointment_date, start_time, end_time, notes, service_price_cents)
+            VALUES (?,?,?,?,?,?,?,?)
+        """, (booking_user["user_id"], barber_id, service_id, appointment_date.isoformat(),
+              start.strftime("%H:%M"), end.strftime("%H:%M"), notes, int(round(float(service["price"]) * 100))))
+        db.commit()
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+        db.rollback()
+        return JSONResponse({"ok": False, "error": "Configuração de agenda inválida."}, status_code=400)
+    finally:
+        db.close()
+    try:
+        msg = (f"🔔 NOVO AGENDAMENTO!\nCliente: {booking_user['name']}\n"
+               f"Data: {appointment_date.strftime('%d/%m/%Y')} às {start.strftime('%H:%M')}\n"
+               f"Serviço: {service_id}\nObs: {notes or '-'}")
         send_whatsapp_notify(msg)
     except Exception:
         pass
@@ -353,43 +630,75 @@ async def api_agendar(request: Request):
 # ---------- API: carrinho ----------
 @app.post("/api/carrinho/add")
 async def api_cart_add(request: Request):
-    data = await request.json()
+    try:
+        data = await request.json()
+        pid, qty = int(data["product_id"]), int(data.get("qty", 1))
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Produto ou quantidade inválidos."}, status_code=400)
+    if pid <= 0 or qty <= 0 or qty > 20:
+        return JSONResponse({"ok": False, "error": "A quantidade deve estar entre 1 e 20."}, status_code=400)
+    db = get_db()
+    product = db.execute("SELECT stock FROM products WHERE id=? AND active=1", (pid,)).fetchone()
+    db.close()
+    if not product or product["stock"] <= 0:
+        return JSONResponse({"ok": False, "error": "Produto indisponível."}, status_code=404)
     cart = get_cart(request)
-    pid = data["product_id"]
-    qty = data.get("qty", 1)
+    cart = [{"product_id": int(i["product_id"]), "qty": int(i["qty"])}
+            for i in cart if isinstance(i, dict) and str(i.get("product_id", "")).isdigit()
+            and str(i.get("qty", "")).isdigit() and int(i["qty"]) > 0][:50]
     found = False
     for item in cart:
         if item["product_id"] == pid:
-            item["qty"] += qty
+            item["qty"] = min(item["qty"] + qty, min(20, product["stock"]))
             found = True
             break
     if not found:
-        cart.append({"product_id": pid, "qty": qty})
+        cart.append({"product_id": pid, "qty": min(qty, product["stock"])})
     resp = JSONResponse({"ok": True, "cart_count": sum(i["qty"] for i in cart)})
-    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7)
+    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7, httponly=True,
+                    secure=IS_PRODUCTION, samesite="lax")
     return resp
 
 
 @app.post("/api/carrinho/update")
 async def api_cart_update(request: Request):
-    data = await request.json()
-    cart = get_cart(request)
-    pid = data["product_id"]
-    qty = data.get("qty", 0)
-    cart = [i for i in cart if i["product_id"] != pid]
+    try:
+        data = await request.json()
+        pid, qty = int(data["product_id"]), int(data.get("qty", 0))
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Produto ou quantidade inválidos."}, status_code=400)
+    if pid <= 0 or qty < 0 or qty > 20:
+        return JSONResponse({"ok": False, "error": "Quantidade inválida."}, status_code=400)
+    cart = [i for i in get_cart(request) if isinstance(i, dict) and i.get("product_id") != pid]
     if qty > 0:
-        cart.append({"product_id": pid, "qty": qty})
+        db = get_db()
+        product = db.execute("SELECT stock FROM products WHERE id=? AND active=1", (pid,)).fetchone()
+        db.close()
+        if not product:
+            return JSONResponse({"ok": False, "error": "Produto indisponível."}, status_code=404)
+        if product["stock"] < 1:
+            return JSONResponse(
+                {"ok": False, "error": "Produto sem estoque disponível."},
+                status_code=409,
+            )
+        cart.append({"product_id": pid, "qty": min(qty, product["stock"], 20)})
     resp = JSONResponse({"ok": True})
-    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7)
+    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7, httponly=True,
+                    secure=IS_PRODUCTION, samesite="lax")
     return resp
 
 
 @app.post("/api/carrinho/remove")
 async def api_cart_remove(request: Request):
-    data = await request.json()
-    cart = [i for i in get_cart(request) if i["product_id"] != data["product_id"]]
+    try:
+        data = await request.json()
+        pid = int(data["product_id"])
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Produto inválido."}, status_code=400)
+    cart = [i for i in get_cart(request) if isinstance(i, dict) and i.get("product_id") != pid]
     resp = JSONResponse({"ok": True})
-    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7)
+    resp.set_cookie(CART_COOKIE, json.dumps(cart), max_age=86400 * 7, httponly=True,
+                    secure=IS_PRODUCTION, samesite="lax")
     return resp
 
 
@@ -398,41 +707,97 @@ async def finalizar_pedido(request: Request, customer_name: str = Form(...),
                            customer_phone: str = Form(...), address: str = Form(...),
                            payment_method: str = Form("pix")):
     user = get_current_user(request)
-    cart = get_cart(request)
-    if not cart:
-        return RedirectResponse(url="/loja", status_code=303)
+    customer_name, customer_phone, address = customer_name.strip(), customer_phone.strip(), address.strip()
+    if not customer_name or not customer_phone or not address or len(customer_name) > 120 or len(customer_phone) > 40 or len(address) > 500:
+        return JSONResponse({"ok": False, "error": "Preencha os dados de entrega corretamente."}, status_code=400)
+    if payment_method not in {"pix", "dinheiro", "cartao"}:
+        return JSONResponse({"ok": False, "error": "Forma de pagamento inválida."}, status_code=400)
+    raw_cart = get_cart(request)
+    try:
+        cart_map = {}
+        for item in raw_cart:
+            if not isinstance(item, dict):
+                raise ValueError()
+            pid, qty = int(item["product_id"]), int(item["qty"])
+            if pid <= 0 or qty <= 0 or qty > 20:
+                raise ValueError()
+            cart_map[pid] = cart_map.get(pid, 0) + qty
+        if not cart_map or len(cart_map) > 50 or any(qty > 20 for qty in cart_map.values()):
+            raise ValueError()
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Carrinho inválido. Revise os produtos e quantidades."}, status_code=400)
     db = get_db()
-    total = cart_total(cart, db)
-    user_id = user["user_id"] if user else None
-    cur = db.execute("""
-        INSERT INTO orders (user_id, customer_name, customer_phone, address, total, payment_method, status)
-        VALUES (?,?,?,?,?,?, 'paid')
-    """, (user_id, customer_name, customer_phone, address, total, payment_method))
-    order_id = cur.lastrowid
-    for item in cart:
-        p = db.execute("SELECT * FROM products WHERE id=?", (item["product_id"],)).fetchone()
-        if p:
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        verified_items = []
+        total = 0.0
+        for pid, qty in cart_map.items():
+            product = db.execute("SELECT id, name, price, stock, cost_price FROM products WHERE id=? AND active=1", (pid,)).fetchone()
+            if not product or product["stock"] < qty:
+                db.rollback()
+                return JSONResponse({"ok": False, "error": "Um produto está indisponível ou sem estoque suficiente."}, status_code=409)
+            verified_items.append((product, qty))
+            total += product["price"] * qty
+        cur = db.execute("""
+            INSERT INTO orders (user_id, customer_name, customer_phone, address, total, payment_method, status)
+            VALUES (?,?,?,?,?,?, 'pending')
+        """, (user["user_id"] if user else None, customer_name, customer_phone, address, total, payment_method))
+        order_id = cur.lastrowid
+        for product, qty in verified_items:
+            changed = db.execute("UPDATE products SET stock=stock-? WHERE id=? AND stock>=? AND active=1",
+                                 (qty, product["id"], qty))
+            if changed.rowcount != 1:
+                db.rollback()
+                return JSONResponse({"ok": False, "error": "Estoque alterado durante a compra. Tente novamente."}, status_code=409)
             db.execute("INSERT INTO order_items (order_id, product_id, product_name, quantity, price) VALUES (?,?,?,?,?)",
-                       (order_id, item["product_id"], p["name"], item["qty"], p["price"]))
-            db.execute("UPDATE products SET stock = stock - ? WHERE id=?", (item["qty"], item["product_id"]))
-    db.commit()
-    db.close()
-    # Notifica o barbeiro sobre novo pedido
+                       (order_id, product["id"], product["name"], qty, product["price"]))
+            db.execute("""INSERT INTO stock_movements
+                (product_id, movement_type, quantity, unit_cost_cents, note, order_id, created_by)
+                VALUES (?, 'sale', ?, ?, ?, ?, ?)""",
+                (product["id"], -qty, int(round(float(product["cost_price"] or 0) * 100)), f"Venda no pedido #{order_id}", order_id,
+                 user["user_id"] if user else None))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
     try:
         send_whatsapp_notify(f"🛍️ NOVO PEDIDO NA LOJA!\nPedido #{order_id}\nCliente: {customer_name}\nTotal: R$ {total:.2f}\nPagamento: {payment_method}")
     except Exception:
         pass
     resp = RedirectResponse(url=f"/pedido-confirmado/{order_id}", status_code=303)
     resp.delete_cookie(CART_COOKIE)
+    if not user:
+        receipt = serializer.dumps({"order_id": order_id, "purpose": "guest-order-receipt"})
+        resp.set_cookie("barbearia_order_receipt", receipt, max_age=1800, httponly=True,
+                        secure=IS_PRODUCTION, samesite="lax")
     return resp
 
 
 @app.get("/pedido-confirmado/{order_id}", response_class=HTMLResponse)
 def pedido_confirmado(request: Request, order_id: int):
+    user = get_current_user(request)
     db = get_db()
     order = db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+    if not order:
+        db.close()
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    owns_order = bool(user and user.get("user_id") == order["user_id"])
+    is_admin = bool(user and user.get("role") == "admin")
+    guest_receipt_valid = False
+    if order["user_id"] is None:
+        receipt = request.cookies.get("barbearia_order_receipt", "")
+        try:
+            receipt_data = serializer.loads(receipt, max_age=1800)
+            guest_receipt_valid = (receipt_data.get("purpose") == "guest-order-receipt"
+                                   and receipt_data.get("order_id") == order_id)
+        except Exception:
+            guest_receipt_valid = False
+    if not (owns_order or is_admin or guest_receipt_valid):
+        db.close()
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
     items = db.execute("SELECT * FROM order_items WHERE order_id=?", (order_id,)).fetchall()
-    user = get_current_user(request)
     db.close()
     return templates.TemplateResponse("pedido_confirmado.html", {
         "request": request, "user": user, "order": order, "items": items,
@@ -515,12 +880,75 @@ def agenda_ics(token: str):
 
 # ---------- Área Administrativa (Barbeiro) ----------
 @app.get("/admin", response_class=HTMLResponse)
-def admin_dashboard(request: Request):
+def admin_dashboard(request: Request, mes: Optional[str] = None, ano: Optional[str] = None, mes_num: Optional[str] = None):
     user = get_current_user(request)
     if not user or user.get("role") not in ("admin", "barber"):
         return RedirectResponse(url="/login", status_code=303)
     db = get_db()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today_date = datetime.now().date()
+    today = today_date.strftime("%Y-%m-%d")
+    latest_closed_date = today_date.replace(day=1) - timedelta(days=1)
+    latest_closed_month = latest_closed_date.strftime("%Y-%m")
+    first_available = db.execute("""
+        SELECT MIN(reference_date) AS first_date FROM (
+            SELECT occurred_on AS reference_date FROM financial_transactions WHERE occurred_on <= ?
+            UNION ALL
+            SELECT appointment_date AS reference_date FROM appointments WHERE appointment_date <= ?
+        )
+    """, (latest_closed_date.isoformat(), latest_closed_date.isoformat())).fetchone()["first_date"]
+    try:
+        first_available_date = datetime.strptime(first_available[:10], "%Y-%m-%d").date() if first_available else latest_closed_date
+    except (TypeError, ValueError):
+        first_available_date = latest_closed_date
+    first_available_month = f"{first_available_date.year:04d}-01"
+    first_available_year = first_available_date.year
+    latest_closed_year = latest_closed_date.year
+    available_years = list(range(first_available_year, latest_closed_year + 1))
+
+    legacy_year = legacy_month_num = None
+    if mes:
+        try:
+            parsed_legacy = datetime.strptime(mes, "%Y-%m")
+            if parsed_legacy.strftime("%Y-%m") == mes:
+                legacy_year, legacy_month_num = parsed_legacy.year, parsed_legacy.month
+        except (TypeError, ValueError):
+            pass
+    try:
+        requested_year = int(ano) if ano else legacy_year
+    except (TypeError, ValueError):
+        requested_year = None
+    selected_year = requested_year if requested_year in available_years else latest_closed_year
+
+    month_names = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    first_month_num = int(first_available_month[5:7]) if selected_year == first_available_year else 1
+    last_month_num = latest_closed_date.month if selected_year == latest_closed_year else 12
+    available_month_numbers = list(range(first_month_num, last_month_num + 1))
+    if not available_month_numbers:
+        selected_year = latest_closed_year
+        first_month_num = int(first_available_month[5:7]) if selected_year == first_available_year else 1
+        last_month_num = latest_closed_date.month if selected_year == latest_closed_year else 12
+        available_month_numbers = list(range(first_month_num, last_month_num + 1))
+    try:
+        requested_month_num = int(mes_num) if mes_num else legacy_month_num
+    except (TypeError, ValueError):
+        requested_month_num = None
+    selected_month_num = requested_month_num if requested_month_num in available_month_numbers else available_month_numbers[-1]
+    selected_month = f"{selected_year:04d}-{selected_month_num:02d}"
+    available_months = [{"value": f"{month:02d}", "label": month_names[month - 1]}
+                        for month in available_month_numbers]
+    available_months_by_year = {}
+    for year in available_years:
+        min_month = int(first_available_month[5:7]) if year == first_available_year else 1
+        max_month = latest_closed_date.month if year == latest_closed_year else 12
+        available_months_by_year[str(year)] = [
+            {"value": f"{month:02d}", "label": month_names[month - 1]}
+            for month in range(min_month, max_month + 1)
+        ]
+    month_start_date = datetime.strptime(selected_month + "-01", "%Y-%m-%d").date()
+    next_month_date = (month_start_date.replace(day=28) + timedelta(days=4)).replace(day=1)
+    month_start = month_start_date.strftime("%Y-%m-%d")
+    month_end = (next_month_date - timedelta(days=1)).strftime("%Y-%m-%d")
     today_appts = db.execute("""
         SELECT a.*, s.name as service_name, u.name as customer_name, u.phone as customer_phone
         FROM appointments a
@@ -529,21 +957,422 @@ def admin_dashboard(request: Request):
         WHERE a.appointment_date=? AND a.status='scheduled'
         ORDER BY a.start_time
     """, (today,)).fetchall()
-    total_today = sum(a["service_price"] if "service_price" in a.keys() else 0 for a in today_appts)
-    # Recalcular total do dia
     total_valor = 0
     for a in today_appts:
         s = db.execute("SELECT price FROM services WHERE id=?", (a["service_id"],)).fetchone()
         total_valor += s["price"] if s else 0
-    pending_orders = db.execute("SELECT COUNT(*) as c FROM orders WHERE status='paid'").fetchone()["c"]
+    pending_orders = db.execute("SELECT COUNT(*) as c FROM orders WHERE status='pending'").fetchone()["c"]
     total_services = db.execute("SELECT COUNT(*) as c FROM services WHERE active=1").fetchone()["c"]
     total_products = db.execute("SELECT COUNT(*) as c FROM products WHERE active=1").fetchone()["c"]
+    management = None
+    if user.get("role") == "admin":
+        finance = db.execute("""
+            SELECT
+              COALESCE(SUM(CASE WHEN transaction_type='income' AND status='paid' THEN amount_cents ELSE 0 END),0) income_cents,
+              COALESCE(SUM(CASE WHEN transaction_type='expense' AND status='paid' THEN amount_cents ELSE 0 END),0) expense_cents,
+              COALESCE(SUM(CASE WHEN status='pending' THEN amount_cents ELSE 0 END),0) pending_cents
+            FROM financial_transactions WHERE occurred_on BETWEEN ? AND ?
+        """, (month_start, month_end)).fetchone()
+        inventory = db.execute("""
+            SELECT COALESCE(SUM(stock * CAST(ROUND(cost_price * 100) AS INTEGER)),0) stock_value_cents,
+                   COALESCE(SUM(CASE WHEN stock <= 3 THEN 1 ELSE 0 END),0) low_stock_count
+            FROM products WHERE active=1
+        """).fetchone()
+        barber_rows = db.execute("""
+            SELECT b.name barber_name, COUNT(a.id) completed_services,
+                   COALESCE(SUM(COALESCE(a.service_price_cents, CAST(ROUND(s.price * 100) AS INTEGER))),0) production_cents
+            FROM appointments a
+            JOIN barbers b ON b.id=a.barber_id
+            JOIN services s ON s.id=a.service_id
+            WHERE a.status='completed' AND a.appointment_date BETWEEN ? AND ?
+            GROUP BY b.id,b.name ORDER BY production_cents DESC
+        """, (month_start, month_end)).fetchall()
+        management = {
+            "income_cents": finance["income_cents"],
+            "expense_cents": finance["expense_cents"],
+            "net_cents": finance["income_cents"] - finance["expense_cents"],
+            "pending_cents": finance["pending_cents"],
+            "stock_value_cents": inventory["stock_value_cents"],
+            "low_stock_count": inventory["low_stock_count"],
+            "barbers": barber_rows,
+        }
     db.close()
     return templates.TemplateResponse("admin/dashboard.html", {
         "request": request, "user": user, "today_appts": today_appts,
         "total_valor": total_valor, "pending_orders": pending_orders,
         "total_services": total_services, "total_products": total_products, "today": today,
+        "selected_month": selected_month, "selected_year": selected_year,
+        "selected_month_num": f"{selected_month_num:02d}",
+        "available_years": available_years, "available_months": available_months,
+        "available_months_by_year": available_months_by_year, "management": management,
     })
+
+
+
+@app.get("/admin/financeiro", response_class=HTMLResponse)
+def admin_financeiro(request: Request, inicio: Optional[str] = None, fim: Optional[str] = None):
+    """Relatório financeiro com acesso restrito ao administrador."""
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    inicio = inicio or today[:8] + "01"
+    fim = fim or today
+    try:
+        inicio_date = datetime.strptime(inicio, "%Y-%m-%d").date()
+        fim_date = datetime.strptime(fim, "%Y-%m-%d").date()
+        if inicio_date > fim_date or (fim_date - inicio_date).days > 366:
+            raise ValueError
+    except (TypeError, ValueError):
+        return RedirectResponse(url="/admin/financeiro?erro=periodo", status_code=303)
+
+    db = get_db()
+    try:
+        totals = db.execute("""
+            SELECT
+                COALESCE(SUM(CASE WHEN transaction_type='income' AND status='paid'
+                    THEN amount_cents ELSE 0 END), 0) AS income_cents,
+                COALESCE(SUM(CASE WHEN transaction_type='expense' AND status='paid'
+                    THEN amount_cents ELSE 0 END), 0) AS expense_cents,
+                COALESCE(SUM(CASE WHEN status='pending'
+                    THEN amount_cents ELSE 0 END), 0) AS pending_cents
+            FROM financial_transactions
+            WHERE occurred_on BETWEEN ? AND ?
+        """, (inicio, fim)).fetchone()
+        stock_costs = db.execute("""
+            SELECT COALESCE(SUM(ABS(m.quantity) * m.unit_cost_cents), 0) AS cogs_cents
+            FROM stock_movements m
+            LEFT JOIN orders o ON o.id=m.order_id
+            WHERE m.movement_type='sale'
+              AND (m.order_id IS NULL OR o.status='paid')
+              AND substr(m.created_at, 1, 10) BETWEEN ? AND ?
+        """, (inicio, fim)).fetchone()
+        store_revenue = db.execute("""
+            SELECT COALESCE(SUM(t.amount_cents), 0) AS income_cents
+            FROM financial_transactions t
+            JOIN orders o ON o.id=t.order_id AND o.status='paid'
+            WHERE t.transaction_type='income' AND t.status='paid' AND t.order_id IS NOT NULL
+              AND t.occurred_on BETWEEN ? AND ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM financial_transactions r WHERE r.reversal_of_id=t.id
+              )
+        """, (inicio, fim)).fetchone()
+        # Relatório de rentabilidade considera apenas pedidos pagos. Os itens são
+        # agregados antes do JOIN para evitar duplicação de valores em pedidos com
+        # mais de uma linha do mesmo produto.
+        product_performance = db.execute("""
+            SELECT p.id AS product_id, p.name AS product_name,
+                   SUM(ABS(m.quantity)) AS quantity_sold,
+                   COALESCE(SUM(ABS(m.quantity) * COALESCE(oi.unit_price_cents, 0)), 0) AS sales_cents,
+                   COALESCE(SUM(ABS(m.quantity) * m.unit_cost_cents), 0) AS cost_cents
+            FROM stock_movements m
+            JOIN products p ON p.id=m.product_id
+            JOIN orders o ON o.id=m.order_id AND o.status='paid'
+            LEFT JOIN (
+                SELECT order_id, product_id,
+                       CAST(ROUND(SUM(quantity * price) * 100) AS INTEGER) AS line_total_cents,
+                       CASE WHEN SUM(quantity) > 0
+                            THEN CAST(ROUND(SUM(quantity * price) * 100 / SUM(quantity)) AS INTEGER)
+                            ELSE 0 END AS unit_price_cents
+                FROM order_items
+                GROUP BY order_id, product_id
+            ) oi ON oi.order_id=m.order_id AND oi.product_id=m.product_id
+            WHERE m.movement_type='sale'
+              AND substr(m.created_at, 1, 10) BETWEEN ? AND ?
+            GROUP BY p.id, p.name
+            ORDER BY sales_cents DESC, p.name
+        """, (inicio, fim)).fetchall()
+        transactions = db.execute("""
+            SELECT t.*, b.name AS barber_name, u.name AS creator_name,
+                   EXISTS (
+                       SELECT 1 FROM financial_transactions r WHERE r.reversal_of_id=t.id
+                   ) AS has_reversal
+            FROM financial_transactions t
+            LEFT JOIN barbers b ON b.id=t.barber_id
+            LEFT JOIN users u ON u.id=t.created_by
+            WHERE t.occurred_on BETWEEN ? AND ?
+            ORDER BY t.occurred_on DESC, t.id DESC
+            LIMIT 250
+        """, (inicio, fim)).fetchall()
+        monthly = db.execute("""
+            SELECT substr(occurred_on, 1, 7) AS month,
+                   COALESCE(SUM(CASE WHEN transaction_type='income' AND status='paid'
+                       THEN amount_cents ELSE 0 END), 0) AS income_cents,
+                   COALESCE(SUM(CASE WHEN transaction_type='expense' AND status='paid'
+                       THEN amount_cents ELSE 0 END), 0) AS expense_cents
+            FROM financial_transactions
+            WHERE occurred_on BETWEEN ? AND ?
+            GROUP BY substr(occurred_on, 1, 7)
+            ORDER BY month
+        """, (inicio, fim)).fetchall()
+        production = db.execute("""
+            SELECT b.id AS barber_id, b.name AS barber_name,
+                   COUNT(a.id) AS completed_services,
+                   COALESCE(SUM(COALESCE(a.service_price_cents, CAST(ROUND(s.price * 100) AS INTEGER))), 0) AS production_cents,
+                   COALESCE(cs.commission_percent, 0) AS commission_percent
+            FROM barbers b
+            LEFT JOIN appointments a
+              ON a.barber_id=b.id AND a.status='completed'
+             AND a.appointment_date BETWEEN ? AND ?
+            LEFT JOIN services s ON s.id=a.service_id
+            LEFT JOIN barber_commission_settings cs ON cs.barber_id=b.id
+            WHERE b.active=1
+            GROUP BY b.id, b.name, cs.commission_percent
+            ORDER BY production_cents DESC, b.name
+        """, (inicio, fim)).fetchall()
+    finally:
+        db.close()
+
+    return templates.TemplateResponse("admin/financeiro.html", {
+        "request": request, "user": user, "inicio": inicio, "fim": fim,
+        "totals": totals, "transactions": transactions, "production": production, "monthly": monthly,
+        "stock_costs": stock_costs, "store_revenue": store_revenue,
+        "product_performance": product_performance,
+        "net_cents": totals["income_cents"] - totals["expense_cents"],
+    })
+
+
+
+@app.get("/admin/financeiro/exportar.csv")
+def admin_financeiro_exportar(request: Request, inicio: Optional[str] = None, fim: Optional[str] = None):
+    """Exporta lançamentos financeiros do período em CSV, exclusivo para administradores."""
+    import csv
+    import io
+
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    inicio = inicio or today[:8] + "01"
+    fim = fim or today
+    try:
+        start_date = datetime.strptime(inicio, "%Y-%m-%d").date()
+        end_date = datetime.strptime(fim, "%Y-%m-%d").date()
+        if start_date > end_date or (end_date - start_date).days > 366:
+            raise ValueError
+    except (TypeError, ValueError):
+        return RedirectResponse(url="/admin/financeiro?erro=periodo", status_code=303)
+
+    db = get_db()
+    try:
+        rows = db.execute("""
+            SELECT t.occurred_on, t.transaction_type, t.category, t.description,
+                   t.amount_cents, t.payment_method, t.status, t.reversal_of_id,
+                   EXISTS (
+                       SELECT 1 FROM financial_transactions r WHERE r.reversal_of_id=t.id
+                   ) AS has_reversal,
+                   b.name AS barber_name, u.name AS creator_name
+            FROM financial_transactions t
+            LEFT JOIN barbers b ON b.id=t.barber_id
+            LEFT JOIN users u ON u.id=t.created_by
+            WHERE t.occurred_on BETWEEN ? AND ?
+            ORDER BY t.occurred_on, t.id
+        """, (inicio, fim)).fetchall()
+    finally:
+        db.close()
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, delimiter=";", lineterminator="\r\n")
+    writer.writerow(["Data", "Tipo", "Categoria", "Descrição", "Valor (R$)",
+                     "Forma de pagamento", "Status", "Barbeiro", "Registrado por",
+                     "Estorno do lançamento", "Possui estorno"])
+    for row in rows:
+        # Evita que campos textuais iniciados por caracteres de fórmula sejam
+        # interpretados como fórmulas por planilhas ao abrir o CSV.
+        values = []
+        for key in ("category", "description", "payment_method", "barber_name", "creator_name"):
+            value = row[key] or ""
+            if str(value).lstrip().startswith(("=", "+", "-", "@")):
+                value = "'" + str(value)
+            values.append(value)
+        writer.writerow([
+            datetime.strptime(row["occurred_on"], "%Y-%m-%d").strftime("%d/%m/%Y"),
+            "Entrada" if row["transaction_type"] == "income" else "Despesa",
+            values[0], values[1], f'{row["amount_cents"] / 100:.2f}',
+            values[2], row["status"], values[3], values[4],
+            row["reversal_of_id"] or "", "Sim" if row["has_reversal"] else "Não",
+        ])
+    filename = f"barberflow-financeiro-{inicio}-a-{fim}.csv"
+    return Response(
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"',
+                 "Cache-Control": "no-store"},
+    )
+
+
+@app.post("/admin/financeiro/comissao")
+def admin_financeiro_comissao(
+    request: Request,
+    barber_id: int = Form(...),
+    commission_percent: str = Form(...),
+):
+    """Define a taxa de comissão por barbeiro; somente administrador pode alterar."""
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+    import math
+    try:
+        rate = float(commission_percent.strip().replace(",", "."))
+    except (TypeError, ValueError, AttributeError):
+        return RedirectResponse(url="/admin/financeiro?erro=comissao", status_code=303)
+    if not math.isfinite(rate) or rate < 0 or rate > 100:
+        return RedirectResponse(url="/admin/financeiro?erro=comissao", status_code=303)
+
+    db = get_db()
+    try:
+        exists = db.execute("SELECT id FROM barbers WHERE id=? AND active=1", (barber_id,)).fetchone()
+        if not exists:
+            return RedirectResponse(url="/admin/financeiro?erro=barbeiro", status_code=303)
+        db.execute("""
+            INSERT INTO barber_commission_settings (barber_id, commission_percent)
+            VALUES (?, ?)
+            ON CONFLICT(barber_id) DO UPDATE SET
+                commission_percent=excluded.commission_percent,
+                updated_at=CURRENT_TIMESTAMP
+        """, (barber_id, rate))
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/financeiro?salvo=comissao", status_code=303)
+
+
+@app.post("/admin/financeiro/lancamento")
+def admin_financeiro_lancamento(
+    request: Request,
+    transaction_type: str = Form(...),
+    category: str = Form(...),
+    description: str = Form(...),
+    amount: str = Form(...),
+    occurred_on: str = Form(...),
+    payment_method: str = Form(""),
+    status: str = Form("paid"),
+):
+    """Registra uma entrada ou despesa manual sem expor o financeiro aos barbeiros."""
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+
+    import math
+    category, description = category.strip(), description.strip()
+    payment_method = payment_method.strip()
+    try:
+        normalized_amount = amount.strip().replace(",", ".")
+        amount_value = float(normalized_amount)
+        occurred = datetime.strptime(occurred_on, "%Y-%m-%d").date()
+    except (TypeError, ValueError, OverflowError):
+        return RedirectResponse(url="/admin/financeiro?erro=dados", status_code=303)
+
+    if (transaction_type not in {"income", "expense"}
+            or status not in {"pending", "paid", "cancelled"}
+            or not category or len(category) > 80
+            or not description or len(description) > 240
+            or len(payment_method) > 40
+            or not math.isfinite(amount_value)
+            or amount_value <= 0 or amount_value > 100_000_000):
+        return RedirectResponse(url="/admin/financeiro?erro=dados", status_code=303)
+
+    amount_cents = int(round(amount_value * 100))
+    if amount_cents <= 0:
+        return RedirectResponse(url="/admin/financeiro?erro=dados", status_code=303)
+
+    db = get_db()
+    try:
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents,
+                 occurred_on, payment_method, status, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (transaction_type, category, description, amount_cents,
+              occurred.isoformat(), payment_method or None, status, user["user_id"]))
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/financeiro?salvo=1", status_code=303)
+
+
+@app.post("/admin/financeiro/confirmar")
+def admin_financeiro_confirmar(request: Request, transaction_id: int = Form(...), status: str = Form(...)):
+    """Confirma pagamento/recebimento; somente administrador."""
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+    if status not in {"paid", "pending", "cancelled"}:
+        return RedirectResponse(url="/admin/financeiro?erro=status", status_code=303)
+    db = get_db()
+    try:
+        current = db.execute(
+            "SELECT status FROM financial_transactions WHERE id=?",
+            (transaction_id,),
+        ).fetchone()
+        if not current or current["status"] == "cancelled":
+            db.rollback()
+            return RedirectResponse(url="/admin/financeiro?erro=lancamento", status_code=303)
+        if current["status"] == "paid" and status != "paid":
+            db.rollback()
+            return RedirectResponse(url="/admin/financeiro?erro=estorno", status_code=303)
+        result = db.execute(
+            "UPDATE financial_transactions SET status=? WHERE id=? AND status != 'cancelled'",
+            (status, transaction_id),
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            return RedirectResponse(url="/admin/financeiro?erro=lancamento", status_code=303)
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/financeiro?salvo=status", status_code=303)
+
+
+
+@app.post("/admin/financeiro/estornar")
+def admin_financeiro_estornar(request: Request, transaction_id: int = Form(...)):
+    """Registra contrapartida de estorno sem apagar o lançamento original."""
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+
+    db = get_db()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        original = db.execute("""
+            SELECT id, transaction_type, category, description, amount_cents,
+                   payment_method, occurred_on, status, reversal_of_id
+            FROM financial_transactions
+            WHERE id=?
+        """, (transaction_id,)).fetchone()
+        if not original or original["status"] != "paid" or original["reversal_of_id"] is not None:
+            db.rollback()
+            return RedirectResponse(url="/admin/financeiro?erro=estorno_indisponivel", status_code=303)
+
+        existing = db.execute(
+            "SELECT id FROM financial_transactions WHERE reversal_of_id=?",
+            (transaction_id,),
+        ).fetchone()
+        if existing:
+            db.rollback()
+            return RedirectResponse(url="/admin/financeiro?erro=estorno_existente", status_code=303)
+
+        reversal_type = "expense" if original["transaction_type"] == "income" else "income"
+        reversal_description = f"Estorno do lançamento #{original['id']}: {original['description']}"
+        db.execute("""
+            INSERT INTO financial_transactions
+                (transaction_type, category, description, amount_cents, occurred_on,
+                 payment_method, status, created_by, reversal_of_id)
+            VALUES (?, 'Estorno', ?, ?, date('now', 'localtime'), ?, 'paid', ?, ?)
+        """, (
+            reversal_type, reversal_description[:240], original["amount_cents"],
+            original["payment_method"], user["user_id"], transaction_id,
+        ))
+        db.commit()
+    except sqlite3.IntegrityError:
+        db.rollback()
+        return RedirectResponse(url="/admin/financeiro?erro=estorno_existente", status_code=303)
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/financeiro?salvo=estorno", status_code=303)
 
 
 @app.get("/admin/agenda", response_class=HTMLResponse)
@@ -571,12 +1400,122 @@ def admin_agenda(request: Request, date: Optional[str] = None):
 async def admin_agenda_status(request: Request):
     user = get_current_user(request)
     if not user or user.get("role") not in ("admin", "barber"):
-        return JSONResponse({"ok": False}, status_code=401)
-    data = await request.json()
+        return JSONResponse({"ok": False, "error": "Acesso não autorizado."}, status_code=403)
+    try:
+        data = await request.json()
+        appointment_id = int(data["appointment_id"])
+        status = str(data["status"]).strip().lower()
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "Dados inválidos."}, status_code=400)
+    if status not in {"scheduled", "completed", "cancelled"}:
+        return JSONResponse({"ok": False, "error": "Status inválido."}, status_code=400)
     db = get_db()
-    db.execute("UPDATE appointments SET status=? WHERE id=?", (data["status"], data["appointment_id"]))
-    db.commit()
-    db.close()
+    try:
+        # Verifica primeiro se o agendamento existe e se o usuário pode acessá-lo.
+        # Assim, a proteção financeira não revela dados de atendimentos alheios.
+        if user.get("role") == "barber":
+            permitted_appointment = db.execute("""
+                SELECT id FROM appointments
+                WHERE id=? AND barber_id IN (
+                    SELECT id FROM barbers WHERE user_id=?
+                )
+            """, (appointment_id, user["user_id"])).fetchone()
+        else:
+            permitted_appointment = db.execute(
+                "SELECT id FROM appointments WHERE id=?", (appointment_id,)
+            ).fetchone()
+        if not permitted_appointment:
+            db.rollback()
+            return JSONResponse(
+                {"ok": False, "error": "Agendamento não encontrado ou sem permissão."},
+                status_code=404,
+            )
+
+        # Um recebimento confirmado não pode ser apagado implicitamente ao cancelar
+        # ou reabrir o atendimento. Primeiro é necessário registrar o estorno no financeiro.
+        paid_income = db.execute("""
+            SELECT t.id FROM financial_transactions t
+            WHERE t.appointment_id=? AND t.transaction_type='income' AND t.status='paid'
+              AND NOT EXISTS (
+                  SELECT 1 FROM financial_transactions r WHERE r.reversal_of_id=t.id
+              )
+            LIMIT 1
+        """, (appointment_id,)).fetchone()
+        current_appointment = db.execute(
+            "SELECT status FROM appointments WHERE id=?", (appointment_id,)
+        ).fetchone()
+        if (current_appointment and paid_income
+                and status != current_appointment["status"]
+                and status != "completed"):
+            db.rollback()
+            return JSONResponse({
+                "ok": False,
+                "error": "Este atendimento possui recebimento confirmado. Registre o estorno no financeiro antes de alterar seu status.",
+                "code": "recebimento_confirmado",
+            }, status_code=409)
+
+        # Barbeiros só podem alterar agendamentos vinculados à própria agenda.
+        if user.get("role") == "barber":
+            updated = db.execute("""
+                UPDATE appointments SET status=?
+                WHERE id=? AND barber_id IN (
+                    SELECT id FROM barbers WHERE user_id=?
+                )
+            """, (status, appointment_id, user["user_id"]))
+        else:
+            updated = db.execute(
+                "UPDATE appointments SET status=? WHERE id=?",
+                (status, appointment_id),
+            )
+        if updated.rowcount != 1:
+            db.rollback()
+            return JSONResponse(
+                {"ok": False, "error": "Agendamento não encontrado ou sem permissão."},
+                status_code=404,
+            )
+
+        # Gera/atualiza o lançamento vinculado ao atendimento de forma idempotente.
+        # A unicidade de appointment_id impede duplicar a receita ao clicar duas vezes.
+        appointment = db.execute("""
+            SELECT a.id, a.barber_id, a.service_price_cents, s.price
+            FROM appointments a
+            JOIN services s ON s.id = a.service_id
+            WHERE a.id = ?
+        """, (appointment_id,)).fetchone()
+        if status == "completed" and appointment:
+            price_cents = appointment["service_price_cents"]
+            if price_cents is None:
+                price_cents = int(round(float(appointment["price"]) * 100))
+                db.execute(
+                    "UPDATE appointments SET service_price_cents=? WHERE id=?",
+                    (price_cents, appointment_id),
+                )
+            if price_cents > 0:
+                db.execute("""
+                    INSERT INTO financial_transactions
+                        (transaction_type, category, description, amount_cents,
+                         occurred_on, status, barber_id, appointment_id, created_by)
+                    VALUES ('income', 'Serviços', ?, ?, date('now', 'localtime'),
+                            'pending', ?, ?, ?)
+                    ON CONFLICT(appointment_id) WHERE appointment_id IS NOT NULL
+                    DO UPDATE SET status='pending', amount_cents=excluded.amount_cents,
+                                  barber_id=excluded.barber_id
+                    WHERE financial_transactions.status != 'paid'
+                """, (
+                    f"Atendimento concluído #{appointment_id}", price_cents,
+                    appointment["barber_id"], appointment_id, user["user_id"],
+                ))
+        else:
+            # Se o atendimento for reaberto ou cancelado, não o mantém como receita paga.
+            # Só cancela receita ainda pendente. Recebimentos pagos são preservados
+            # no histórico e, quando estornados, ficam compensados por lançamento próprio.
+            db.execute("""
+                UPDATE financial_transactions SET status='cancelled'
+                WHERE appointment_id=? AND transaction_type='income' AND status='pending'
+            """, (appointment_id,))
+        db.commit()
+    finally:
+        db.close()
     return JSONResponse({"ok": True})
 
 
@@ -598,16 +1537,33 @@ def admin_servico_salvar(request: Request, name: str = Form(...), description: s
     user = get_current_user(request)
     if not user or user.get("role") not in ("admin", "barber"):
         return RedirectResponse(url="/login", status_code=303)
+    name, description, category = name.strip(), description.strip(), category.strip()
+    # Nunca confiar nos valores numéricos enviados pelo formulário.
+    import math
+    if (not name or len(name) > 120 or len(description) > 2000 or
+            not category or len(category) > 80 or
+            not math.isfinite(price) or price < 0 or price > 1_000_000 or
+            duration_min < 5 or duration_min > 480):
+        return RedirectResponse(url="/admin/servicos?erro=dados", status_code=303)
     db = get_db()
-    if service_id:
-        db.execute("UPDATE services SET name=?, description=?, price=?, duration_min=?, category=? WHERE id=?",
-                   (name, description, price, duration_min, category, service_id))
-    else:
-        db.execute("INSERT INTO services (name, description, price, duration_min, category) VALUES (?,?,?,?,?)",
-                   (name, description, price, duration_min, category))
-    db.commit()
-    db.close()
-    return RedirectResponse(url="/admin/servicos", status_code=303)
+    try:
+        if service_id:
+            changed = db.execute(
+                "UPDATE services SET name=?, description=?, price=?, duration_min=?, category=? WHERE id=?",
+                (name, description, price, duration_min, category, service_id),
+            )
+            if changed.rowcount != 1:
+                db.rollback()
+                return RedirectResponse(url="/admin/servicos?erro=nao_encontrado", status_code=303)
+        else:
+            db.execute(
+                "INSERT INTO services (name, description, price, duration_min, category) VALUES (?,?,?,?,?)",
+                (name, description, price, duration_min, category),
+            )
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/servicos?salvo=1", status_code=303)
 
 
 @app.post("/admin/servicos/excluir")
@@ -629,28 +1585,128 @@ def admin_produtos(request: Request):
         return RedirectResponse(url="/login", status_code=303)
     db = get_db()
     products = [dict(r) for r in db.execute("SELECT * FROM products ORDER BY category, name").fetchall()]
+    movements = db.execute("""
+        SELECT m.*, p.name AS product_name, u.name AS user_name
+        FROM stock_movements m
+        JOIN products p ON p.id=m.product_id
+        LEFT JOIN users u ON u.id=m.created_by
+        ORDER BY m.created_at DESC, m.id DESC LIMIT 100
+    """).fetchall()
     db.close()
-    return templates.TemplateResponse("admin/produtos.html", {"request": request, "user": user, "products": products})
+    return templates.TemplateResponse("admin/produtos.html", {
+        "request": request, "user": user, "products": products, "movements": movements,
+    })
 
 
 @app.post("/admin/produtos/salvar")
-def admin_produto_salvar(request: Request, name: str = Form(...), description: str = Form(""),
-                         price: float = Form(...), stock: int = Form(0),
+async def admin_produto_salvar(request: Request, name: str = Form(...), description: str = Form(""),
+                         price: float = Form(...), stock: int = Form(0), cost_price: float = Form(0),
                          category: str = Form("Geral"), image_url: str = Form(""),
-                         product_id: Optional[int] = Form(None)):
+                         product_id: Optional[int] = Form(None), image_file: UploadFile = File(None)):
     user = get_current_user(request)
     if not user or user.get("role") not in ("admin", "barber"):
         return RedirectResponse(url="/login", status_code=303)
+    import math
+    name, description, category, image_url = (
+        name.strip(), description.strip(), category.strip(), image_url.strip()
+    )
+    if (not name or len(name) > 120 or len(description) > 2000 or
+            not category or len(category) > 80 or len(image_url) > 2000 or
+            not math.isfinite(price) or price < 0 or price > 1_000_000 or
+            not math.isfinite(cost_price) or cost_price < 0 or
+            stock < 0 or stock > 1_000_000):
+        return RedirectResponse(url="/admin/produtos?erro=dados", status_code=303)
+
+    uploaded_url, uploaded_path = None, None
+    if getattr(image_file, "filename", ""):
+        uploaded_url, uploaded_path, upload_error = await persist_image_upload(image_file)
+        if upload_error:
+            return RedirectResponse(url=f"/admin/produtos?imagem_erro={upload_error}", status_code=303)
+        image_url = uploaded_url
+    elif image_url:
+        if image_url.startswith("/uploads/"):
+            if not is_stored_image_url(image_url):
+                return RedirectResponse(url="/admin/produtos?erro=imagem", status_code=303)
+        else:
+            from urllib.parse import urlsplit
+            parsed_image = urlsplit(image_url)
+            if parsed_image.scheme not in {"https", "http"} or not parsed_image.hostname:
+                return RedirectResponse(url="/admin/produtos?erro=imagem", status_code=303)
+    if user.get("role") != "admin":
+        remove_uploaded_image(uploaded_url)
+        return RedirectResponse(url="/login", status_code=303)
     db = get_db()
-    if product_id:
-        db.execute("UPDATE products SET name=?, description=?, price=?, stock=?, category=?, image_url=? WHERE id=?",
-                   (name, description, price, stock, category, image_url, product_id))
-    else:
-        db.execute("INSERT INTO products (name, description, price, stock, category, image_url) VALUES (?,?,?,?,?,?)",
-                   (name, description, price, stock, category, image_url))
-    db.commit()
-    db.close()
-    return RedirectResponse(url="/admin/produtos", status_code=303)
+    old_image_url = ""
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        if product_id:
+            current = db.execute("SELECT stock, image_url FROM products WHERE id=?", (product_id,)).fetchone()
+            if not current:
+                db.rollback()
+                remove_uploaded_image(uploaded_url)
+                return RedirectResponse(url="/admin/produtos?erro=nao_encontrado", status_code=303)
+            old_image_url = current["image_url"] or ""
+            if not uploaded_url and not image_url:
+                image_url = old_image_url
+            changed_qty = stock - int(current["stock"])
+            db.execute("UPDATE products SET name=?, description=?, price=?, cost_price=?, stock=?, category=?, image_url=? WHERE id=?",
+                (name, description, price, cost_price, stock, category, image_url, product_id))
+            if changed_qty:
+                db.execute("""INSERT INTO stock_movements
+                    (product_id, movement_type, quantity, unit_cost_cents, note, created_by)
+                    VALUES (?, 'adjustment', ?, ?, ?, ?)""",
+                    (product_id, changed_qty, int(round(cost_price * 100)), "Ajuste de saldo pelo cadastro do produto", user["user_id"]))
+        else:
+            cur = db.execute("INSERT INTO products (name, description, price, cost_price, stock, category, image_url) VALUES (?,?,?,?,?,?,?)",
+                (name, description, price, cost_price, stock, category, image_url))
+            if stock:
+                db.execute("""INSERT INTO stock_movements
+                    (product_id, movement_type, quantity, unit_cost_cents, note, created_by)
+                    VALUES (?, 'opening', ?, ?, 'Saldo inicial do cadastro', ?)""",
+                    (cur.lastrowid, stock, int(round(cost_price * 100)), user["user_id"]))
+        db.commit()
+    except Exception:
+        db.rollback()
+        remove_uploaded_image(uploaded_url)
+        raise
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/produtos?salvo=1", status_code=303)
+
+
+@app.post("/admin/estoque/entrada")
+def admin_estoque_entrada(request: Request, product_id: int = Form(...),
+                          quantity: int = Form(...), unit_cost: float = Form(...),
+                          note: str = Form("")):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+    import math
+    note = note.strip()
+    if quantity < 1 or quantity > 1_000_000 or not math.isfinite(unit_cost) or unit_cost < 0 or unit_cost > 1_000_000 or len(note) > 500:
+        return RedirectResponse(url="/admin/produtos?erro=entrada", status_code=303)
+    unit_cost_cents = int(round(unit_cost * 100))
+    db = get_db()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        product = db.execute("SELECT id, stock, cost_price FROM products WHERE id=? AND active=1", (product_id,)).fetchone()
+        if not product:
+            db.rollback()
+            return RedirectResponse(url="/admin/produtos?erro=nao_encontrado", status_code=303)
+        old_stock = int(product["stock"])
+        new_stock = old_stock + quantity
+        old_cost_cents = int(round(float(product["cost_price"] or 0) * 100))
+        weighted_cost_cents = int(round((old_stock * old_cost_cents + quantity * unit_cost_cents) / new_stock))
+        db.execute("UPDATE products SET stock=?, cost_price=? WHERE id=?",
+                   (new_stock, weighted_cost_cents / 100, product_id))
+        db.execute("""INSERT INTO stock_movements
+            (product_id, movement_type, quantity, unit_cost_cents, note, created_by)
+            VALUES (?, 'purchase', ?, ?, ?, ?)""",
+            (product_id, quantity, unit_cost_cents, note or "Entrada de compra", user["user_id"]))
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/produtos?entrada=1", status_code=303)
 
 
 @app.post("/admin/produtos/excluir")
@@ -680,18 +1736,42 @@ def admin_portfolio(request: Request):
 
 
 @app.post("/admin/portfolio/salvar")
-def admin_portfolio_salvar(request: Request, name: str = Form(...), description: str = Form(""),
-                           image_url: str = Form(...), category: str = Form("Corte"),
-                           service_id: Optional[int] = Form(None)):
+async def admin_portfolio_salvar(request: Request, name: str = Form(...), description: str = Form(""),
+                           image_url: str = Form(""), category: str = Form("Corte"),
+                           service_id: Optional[int] = Form(None), image_file: UploadFile = File(None)):
     user = get_current_user(request)
     if not user or user.get("role") not in ("admin", "barber"):
         return RedirectResponse(url="/login", status_code=303)
+    name, description, image_url, category = name.strip(), description.strip(), image_url.strip(), category.strip()
+    if not name or len(name) > 120 or len(description) > 2000 or len(category) > 80:
+        return RedirectResponse(url="/admin/portfolio?erro=dados", status_code=303)
+    uploaded_url, uploaded_path = None, None
+    if getattr(image_file, "filename", ""):
+        uploaded_url, uploaded_path, upload_error = await persist_image_upload(image_file)
+        if upload_error:
+            return RedirectResponse(url=f"/admin/portfolio?imagem_erro={upload_error}", status_code=303)
+        image_url = uploaded_url
+    else:
+        if image_url.startswith("/uploads/"):
+            valid_image_url = is_stored_image_url(image_url)
+        else:
+            from urllib.parse import urlsplit
+            parsed_image = urlsplit(image_url)
+            valid_image_url = parsed_image.scheme in {"https", "http"} and bool(parsed_image.hostname)
+        if len(image_url) > 2000 or not valid_image_url:
+            return RedirectResponse(url="/admin/portfolio?erro=imagem", status_code=303)
     db = get_db()
-    db.execute("INSERT INTO portfolio (name, description, image_url, category, service_id) VALUES (?,?,?,?,?)",
-               (name, description, image_url, category, service_id))
-    db.commit()
-    db.close()
-    return RedirectResponse(url="/admin/portfolio", status_code=303)
+    try:
+        db.execute("INSERT INTO portfolio (name, description, image_url, category, service_id) VALUES (?,?,?,?,?)",
+                   (name, description, image_url, category, service_id))
+        db.commit()
+    except Exception:
+        db.rollback()
+        remove_uploaded_image(uploaded_url)
+        raise
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/portfolio?salvo=1", status_code=303)
 
 
 @app.post("/admin/portfolio/excluir")
@@ -722,38 +1802,247 @@ def admin_pedidos(request: Request):
     return templates.TemplateResponse("admin/pedidos.html", {"request": request, "user": user, "orders": orders})
 
 
+@app.post("/admin/pedidos/status")
+def admin_pedidos_status(request: Request, order_id: int = Form(...), status: str = Form(...)):
+    """Atualiza o status do pedido e sincroniza a receita da loja com o financeiro."""
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+    if status not in {"pending", "paid", "cancelled"}:
+        return RedirectResponse(url="/admin/pedidos?erro=status", status_code=303)
+    db = get_db()
+    try:
+        order = db.execute("SELECT id, total, payment_method, status FROM orders WHERE id=?", (order_id,)).fetchone()
+        if not order:
+            return RedirectResponse(url="/admin/pedidos?erro=pedido", status_code=303)
+        current_status = order["status"]
+        # Pedido cancelado é terminal: evita reativação sem nova reserva de estoque.
+        if current_status == "cancelled" and status != "cancelled":
+            db.rollback()
+            return RedirectResponse(url="/admin/pedidos?erro=cancelado", status_code=303)
+
+        # Cancelar pedido pago exige contrapartida de estorno previamente registrada.
+        if status == "cancelled" and current_status != "cancelled":
+            paid_order_income = db.execute("""
+                SELECT t.id FROM financial_transactions t
+                WHERE t.order_id=? AND t.transaction_type='income' AND t.status='paid'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM financial_transactions r WHERE r.reversal_of_id=t.id
+                  )
+                LIMIT 1
+            """, (order_id,)).fetchone()
+            if paid_order_income:
+                db.rollback()
+                return RedirectResponse(url="/admin/pedidos?erro=estorno", status_code=303)
+
+        if status == "cancelled" and current_status != "cancelled":
+            # Devolve cada saída de estoque do pedido uma única vez. O movimento
+            # de retorno e a atualização do saldo compartilham a transação.
+            sales = db.execute("""
+                SELECT product_id, SUM(-quantity) AS quantity,
+                       MAX(unit_cost_cents) AS unit_cost_cents
+                FROM stock_movements
+                WHERE order_id=? AND movement_type='sale' AND quantity < 0
+                GROUP BY product_id
+            """, (order_id,)).fetchall()
+            for sale in sales:
+                already_returned = db.execute("""
+                    SELECT 1 FROM stock_movements
+                    WHERE order_id=? AND product_id=? AND movement_type='return'
+                    LIMIT 1
+                """, (order_id, sale["product_id"])).fetchone()
+                if already_returned:
+                    continue
+                quantity = int(sale["quantity"] or 0)
+                if quantity <= 0:
+                    continue
+                db.execute("UPDATE products SET stock=stock+? WHERE id=?",
+                           (quantity, sale["product_id"]))
+                db.execute("""
+                    INSERT INTO stock_movements
+                        (product_id, movement_type, quantity, unit_cost_cents, note,
+                         order_id, created_by)
+                    VALUES (?, 'return', ?, ?, ?, ?, ?)
+                """, (sale["product_id"], quantity, int(sale["unit_cost_cents"] or 0),
+                      f"Devolução por cancelamento do pedido #{order_id}", order_id, user["user_id"]))
+
+        db.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
+        if status == "paid":
+            amount_cents = int(round(float(order["total"]) * 100))
+            if amount_cents <= 0:
+                db.rollback()
+                return RedirectResponse(url="/admin/pedidos?erro=valor", status_code=303)
+            db.execute("""
+                INSERT INTO financial_transactions
+                    (transaction_type, category, description, amount_cents, occurred_on,
+                     payment_method, status, order_id, created_by)
+                VALUES ('income', 'Loja', ?, ?, date('now', 'localtime'), ?, 'paid', ?, ?)
+                ON CONFLICT(order_id) WHERE order_id IS NOT NULL
+                DO UPDATE SET amount_cents=excluded.amount_cents,
+                              payment_method=excluded.payment_method, status='paid'
+            """, (f"Pedido da loja #{order_id}", amount_cents, order["payment_method"], order_id, user["user_id"]))
+        else:
+            # Não rebaixa lançamentos pagos: após estorno, a receita original e a
+            # contrapartida permanecem auditáveis; somente pendências são canceladas.
+            db.execute("""
+                UPDATE financial_transactions SET status='cancelled'
+                WHERE order_id=? AND transaction_type='income' AND status='pending'
+            """, (order_id,))
+        db.commit()
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/pedidos?salvo=status", status_code=303)
+
+
 @app.get("/admin/configuracoes", response_class=HTMLResponse)
 def admin_configuracoes(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
-    settings = get_settings()
+    db = get_db()
+    try:
+        settings = get_settings(db)
+        smtp_settings = public_smtp_settings(get_smtp_config(db))
+    finally:
+        db.close()
     return templates.TemplateResponse("admin/configuracoes.html", {
         "request": request, "user": user, "settings": settings,
+        "smtp_settings": smtp_settings,
     })
 
 
 @app.post("/admin/configuracoes/salvar")
 async def admin_configuracoes_salvar(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+    form = await request.form()
+    allowed_keys = {"shop_name", "shop_slogan", "logo_url", "color_primary",
+                    "color_primary_light", "color_bg", "color_card", "color_text",
+                    "whatsapp", "instagram", "address", "whatsapp_notify",
+                    "whatsapp_api_url"}
+
+    logo_upload = form.get("logo_file")
+    uploaded_logo = None
+    if getattr(logo_upload, "filename", ""):
+        image_url, saved_logo, upload_error = await persist_image_upload(logo_upload)
+        if upload_error:
+            return RedirectResponse(url=f"/admin/configuracoes?logo_erro={upload_error}", status_code=303)
+        uploaded_logo = (image_url, saved_logo)
+
+    logo_url = uploaded_logo[0] if uploaded_logo else str(form.get("logo_url", "")).strip()[:2000]
+    if logo_url and not uploaded_logo:
+        if logo_url.startswith("/uploads/"):
+            if not is_stored_image_url(logo_url):
+                return RedirectResponse(url="/admin/configuracoes?logo_erro=url", status_code=303)
+        else:
+            from urllib.parse import urlsplit
+            parsed_logo = urlsplit(logo_url)
+            if parsed_logo.scheme not in {"http", "https"} or not parsed_logo.hostname:
+                return RedirectResponse(url="/admin/configuracoes?logo_erro=url", status_code=303)
+
+    values = {}
+    for key in allowed_keys.intersection(form.keys()):
+        values[key] = logo_url if key == "logo_url" else str(form[key]).strip()[:2000]
+    if "logo_url" not in values:
+        values["logo_url"] = logo_url
+    if values.get("whatsapp_api_url"):
+        from urllib.parse import urlsplit
+        parsed = urlsplit(values["whatsapp_api_url"])
+        if parsed.scheme != "https" or not parsed.hostname:
+            return RedirectResponse(url="/admin/configuracoes?erro=url", status_code=303)
+
+    db = get_db()
+    saved_logo = None
+    try:
+        old_logo_url = get_settings(db).get("logo_url", "")
+        if uploaded_logo:
+            saved_logo = uploaded_logo[1]
+        for key, value in values.items():
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
+                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                       (key, value))
+        db.commit()
+    except Exception:
+        db.rollback()
+        if saved_logo:
+            saved_logo.unlink(missing_ok=True)
+        raise
+    finally:
+        db.close()
+
+    return RedirectResponse(url="/admin/configuracoes?salvo=1", status_code=303)
+
+@app.post("/admin/configuracoes/smtp/salvar")
+async def admin_smtp_salvar(request: Request):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
     form = await request.form()
     db = get_db()
-    for key in form:
-        db.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
-                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                   (key, form[key]))
-    db.commit()
-    db.close()
-    return RedirectResponse(url="/admin/configuracoes?salvo=1", status_code=303)
+    try:
+        current = get_smtp_config(db)
+        values, error = validate_smtp_form(form, current["password_is_configured"])
+        if error:
+            return RedirectResponse(url=f"/admin/configuracoes?smtp_erro={error}", status_code=303)
+        try:
+            save_smtp_settings(db, values)
+            db.commit()
+        except RuntimeError:
+            db.rollback()
+            return RedirectResponse(url="/admin/configuracoes?smtp_erro=chave", status_code=303)
+    finally:
+        db.close()
+    return RedirectResponse(url="/admin/configuracoes?smtp_salvo=1", status_code=303)
+
+
+@app.post("/admin/configuracoes/smtp/testar")
+async def admin_smtp_testar(request: Request):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+    form = await request.form()
+    recipient = str(form.get("recipient", "")).strip()
+    address = parseaddr(recipient)[1]
+    if not address or "@" not in address or len(address) > 320:
+        return RedirectResponse(url="/admin/configuracoes?smtp_teste=destinatario", status_code=303)
+    db = get_db()
+    try:
+        config = get_smtp_config(db)
+    finally:
+        db.close()
+    if not (config["enabled"] and config["smtp_host"].strip() and config["smtp_from"].strip()
+            and config["app_base_url"].strip().startswith("https://")):
+        return RedirectResponse(url="/admin/configuracoes?smtp_teste=configuracao", status_code=303)
+    smtp_user = config["smtp_user"].strip()
+    if smtp_user and not config["password"]:
+        return RedirectResponse(url="/admin/configuracoes?smtp_teste=senha", status_code=303)
+    message = EmailMessage()
+    message["Subject"] = "Teste de envio — BarberFlow"
+    message["From"] = config["smtp_from"].strip()
+    message["To"] = address
+    message.set_content("Este é um e-mail de teste enviado pelas configurações SMTP do BarberFlow.")
+    try:
+        smtp_factory = smtplib.SMTP_SSL if config["smtp_security"] == "ssl" else smtplib.SMTP
+        with smtp_factory(config["smtp_host"].strip(), int(config["smtp_port"] or "587"), timeout=10) as smtp:
+            if config["smtp_security"] != "ssl":
+                smtp.ehlo()
+            if config["smtp_security"] == "starttls":
+                smtp.starttls()
+                smtp.ehlo()
+            if smtp_user:
+                smtp.login(smtp_user, config["password"])
+            smtp.send_message(message)
+    except Exception:
+        return RedirectResponse(url="/admin/configuracoes?smtp_teste=erro_envio", status_code=303)
+    return RedirectResponse(url="/admin/configuracoes?smtp_teste=sucesso", status_code=303)
 
 
 # ---------- Gerenciamento de Barbeiros ----------
 @app.get("/admin/barbeiros", response_class=HTMLResponse)
 def admin_barbeiros(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
     db = get_db()
     barbers = [dict(r) for r in db.execute("""
@@ -770,7 +2059,7 @@ def admin_barbeiros(request: Request):
 @app.post("/admin/barbeiros/salvar")
 async def admin_barbeiro_salvar(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
     form = await request.form()
     name = form.get("name", "").strip()
@@ -779,8 +2068,14 @@ async def admin_barbeiro_salvar(request: Request):
     db = get_db()
     barber_id = form.get("barber_id")
     work_days = json.dumps([int(d) for d in form.getlist("work_days")] or [1,2,3,4,5,6])
-    email = form.get("email", "").strip()
-    password = form.get("password", "").strip()
+    email = form.get("email", "").strip().lower()
+    password = form.get("password", "")
+    if email and ("@" not in email or len(email) > 254):
+        db.close()
+        return RedirectResponse(url="/admin/barbeiros?erro=email", status_code=303)
+    if password and len(password) < 10:
+        db.close()
+        return RedirectResponse(url="/admin/barbeiros?erro=senha", status_code=303)
 
     if barber_id:
         db.execute("""UPDATE barbers SET name=?, bio=?, photo_url=?, work_start=?, work_end=?,
@@ -792,7 +2087,7 @@ async def admin_barbeiro_salvar(request: Request):
         if email and password:
             existing = db.execute("SELECT user_id FROM barbers WHERE id=?", (barber_id,)).fetchone()
             if existing and existing["user_id"]:
-                db.execute("UPDATE users SET email=?, password_hash=?, name=? WHERE id=?",
+                db.execute("UPDATE users SET email=?, password_hash=?, name=?, session_version=session_version+1 WHERE id=?",
                            (email, hash_password(password), name, existing["user_id"]))
             else:
                 cur = db.execute("INSERT INTO users (name, email, password_hash, role) VALUES (?,?,?,?)",
@@ -817,7 +2112,7 @@ async def admin_barbeiro_salvar(request: Request):
 @app.post("/admin/barbeiros/excluir")
 async def admin_barbeiro_excluir(request: Request):
     user = get_current_user(request)
-    if not user or user.get("role") not in ("admin", "barber"):
+    if not user or user.get("role") != "admin":
         return RedirectResponse(url="/login", status_code=303)
     form = await request.form()
     db = get_db()
@@ -866,6 +2161,14 @@ def manifest():
         "theme_color": settings["color_primary"],
         "icons": [{"src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230f0f0f'/><text x='50' y='65' font-size='50' text-anchor='middle' fill='%23c9a227' font-weight='bold'>✂</text></svg>", "sizes": "192x192", "type": "image/svg+xml"}],
     }
+
+
+# Rotas incrementais de clientes, alteração e recuperação de senha.
+from security_routes import register_security_routes
+
+register_security_routes(
+    app, templates, get_db, get_current_user, hash_password, verify_password
+)
 
 
 if __name__ == "__main__":

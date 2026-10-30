@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Primeiro acesso — BarberFlow{% endblock %}
+{% block content %}
+<div class="form-card">
+  <h2>Primeiro acesso</h2>
+  <p class="text-muted">Informe o CPF usado no cadastro. Enviaremos um link para criar ou redefinir sua senha ao e-mail registrado.</p>
+  {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
+  {% if sent %}<div class="success-msg">Se houver um cadastro ativo para este CPF, o link será enviado ao e-mail registrado. Verifique também a caixa de spam.</div>{% endif %}
+  {% if not_found %}<div class="error-msg">Não encontramos um cadastro ativo para este CPF.</div><p><a class="btn btn-dourado btn-block" href="/cadastro?cpf_nao_encontrado=1">Cadastrar dados de cliente</a></p>{% endif %}
+  {% if not sent and not_found == false %}<form method="post" action="/primeiro-acesso">
+    <div class="form-group"><label for="cpf">CPF</label><input id="cpf" type="text" name="cpf" data-mask="cpf" class="form-control" value="{{ cpf }}" inputmode="numeric" autocomplete="off" placeholder="000.000.000-00" required></div>
+    <button type="submit" class="btn btn-dourado btn-block">Consultar CPF</button>
+  </form>{% endif %}
+  <p class="text-center mt-2"><a href="/login">Voltar ao login</a></p>
+</div>
+{% endblock %}

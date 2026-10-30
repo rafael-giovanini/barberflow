@@ -38,7 +38,7 @@
     <div class="appt-item">
       <div class="appt-info">
         <div class="name">Pedido #{{ o.id }} — R$ {{ "%.2f"|format(o.total) }}</div>
-        <div class="detail">{{ o.created_at }} · {{ o.payment_method }} · {{ o.address }}</div>
+        <div class="detail">{{ o.created_at[:10]|date_br }} {{ o.created_at[11:16] }} · {{ o.payment_method }} · {{ o.address }}</div>
       </div>
       <span class="badge badge-{{ o.status }}">{{ o.status }}</span>
     </div>

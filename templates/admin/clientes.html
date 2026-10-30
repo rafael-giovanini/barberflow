@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Gestão de clientes — BarberFlow{% endblock %}
+{% block content %}
+<section class="section container" style="max-width:1100px;">
+  <h2 class="section-title">Gestão de clientes</h2>
+  <p class="section-sub">Pesquise, atualize os dados e desative contas sem excluir o histórico.</p>
+  <p><a class="btn btn-dourado" href="/admin/clientes/novo">Cadastrar cliente</a></p>
+  {% if request.query_params.get('salvo') %}<div class="success-msg">Cadastro atualizado.</div>{% endif %}
+  {% if request.query_params.get('erro') %}<div class="error-msg">Não foi possível salvar. Verifique os dados, CPF e e-mail.</div>{% endif %}
+  <form method="get" action="/admin/clientes" class="flex mb-4">
+    <input type="search" name="q" class="form-control" value="{{ q }}" placeholder="Nome, CPF, e-mail ou telefone" aria-label="Pesquisar clientes">
+    <button class="btn btn-dourado" type="submit">Pesquisar</button>
+  </form>
+  <p class="text-muted">Exibindo até 250 clientes. Selecione um nome para consultar ou editar os dados.</p>
+  {% if not customers %}<p class="text-center text-muted">Nenhum cliente encontrado.</p>{% endif %}
+  {% for c in customers %}
+  <article class="customer-record">
+    <details class="customer-details">
+      <summary><span class="customer-name">{{ c.name }}</span><span class="customer-summary-hint">Ver dados</span></summary>
+      <div class="customer-details-body">
+        <div class="customer-read-view" data-customer-view>
+          <dl class="customer-read-grid">
+            <div><dt>Nome completo</dt><dd>{{ c.name }}</dd></div>
+            <div><dt>CPF</dt><dd data-display-mask="cpf">{{ c.cpf or '' }}</dd></div>
+            <div><dt>Nascimento</dt><dd>{{ c.birth_date|date_br if c.birth_date else '—' }}</dd></div>
+            <div><dt>E-mail</dt><dd>{{ c.email }}</dd></div>
+            <div><dt>Telefone / WhatsApp</dt><dd data-display-mask="phone">{{ c.phone or '' }}</dd></div>
+            <div><dt>CEP</dt><dd data-display-mask="cep">{{ c.zip_code or '' }}</dd></div>
+            <div><dt>Rua / Avenida</dt><dd>{{ c.address or '—' }}</dd></div>
+            <div><dt>Número</dt><dd>{{ c.address_number or '—' }}</dd></div>
+            <div><dt>Complemento</dt><dd>{{ c.address_complement or '—' }}</dd></div>
+            <div><dt>Bairro</dt><dd>{{ c.neighborhood or '—' }}</dd></div>
+            <div><dt>Cidade</dt><dd>{{ c.city or '—' }}</dd></div>
+            <div><dt>Estado (UF)</dt><dd>{{ c.state or '—' }}</dd></div>
+          </dl>
+          <div class="customer-record-actions">
+            <span class="badge">{{ 'Ativo' if c.active else 'Desativado' }}</span>
+            {% if c.first_access_required %}<span class="badge">Aguardando primeiro acesso</span>{% endif %}
+            <button class="btn btn-dourado btn-sm" type="button" data-customer-edit-button>Alterar dados</button>
+          </div>
+        </div>
+        <form method="post" action="/admin/clientes/salvar" class="customer-form-grid customer-edit-grid" data-address-form data-customer-edit hidden>
+          <input type="hidden" name="customer_id" value="{{ c.id }}">
+          <div class="form-group"><label for="name-{{ c.id }}">Nome completo</label><input id="name-{{ c.id }}" class="form-control" name="name" value="{{ c.name }}" required maxlength="120"></div>
+          <div class="form-group"><label for="cpf-{{ c.id }}">CPF</label><input id="cpf-{{ c.id }}" class="form-control" name="cpf" data-mask="cpf" inputmode="numeric" value="{{ c.cpf or '' }}" required></div>
+          <div class="form-group"><label for="birth_date-{{ c.id }}">Nascimento</label><input id="birth_date-{{ c.id }}" type="date" class="form-control" name="birth_date" value="{{ c.birth_date or '' }}" required></div>
+          <div class="form-group"><label for="email-{{ c.id }}">E-mail</label><input id="email-{{ c.id }}" class="form-control" type="email" name="email" value="{{ c.email }}" required maxlength="254"></div>
+          <div class="form-group"><label for="phone-{{ c.id }}">Telefone / WhatsApp</label><input id="phone-{{ c.id }}" class="form-control" name="phone" data-mask="phone" inputmode="numeric" value="{{ c.phone or '' }}" required maxlength="40"></div>
+          <div class="form-group"><label for="zip-{{ c.id }}">CEP</label><input id="zip-{{ c.id }}" class="form-control" name="zip_code" data-mask="cep" inputmode="numeric" value="{{ c.zip_code or '' }}" required><small class="field-hint form-grid-full" data-cep-message aria-live="polite"></small></div>
+          <div class="form-group"><label for="address-{{ c.id }}">Rua / Avenida</label><input id="address-{{ c.id }}" class="form-control" name="address" value="{{ c.address or '' }}" required></div>
+          <div class="form-group"><label for="number-{{ c.id }}">Número</label><input id="number-{{ c.id }}" class="form-control" name="address_number" value="{{ c.address_number or '' }}" required></div>
+          <div class="form-group"><label for="complement-{{ c.id }}">Complemento</label><input id="complement-{{ c.id }}" class="form-control" name="address_complement" value="{{ c.address_complement or '' }}"></div>
+          <div class="form-group"><label for="neighborhood-{{ c.id }}">Bairro</label><input id="neighborhood-{{ c.id }}" class="form-control" name="neighborhood" value="{{ c.neighborhood or '' }}" required></div>
+          <div class="form-group"><label for="city-{{ c.id }}">Cidade</label><input id="city-{{ c.id }}" class="form-control" name="city" value="{{ c.city or '' }}" required></div>
+          <div class="form-group"><label for="state-{{ c.id }}">Estado (UF)</label><input id="state-{{ c.id }}" class="form-control" name="state" value="{{ c.state or '' }}" minlength="2" maxlength="2" required></div>
+          <div class="customer-record-actions form-grid-full"><span class="badge">{{ 'Ativo' if c.active else 'Desativado' }}</span> {% if c.first_access_required %}<span class="badge">Aguardando primeiro acesso</span>{% endif %}<button class="btn btn-dourado btn-sm" type="submit">Salvar dados</button><button class="btn btn-outline btn-sm" type="button" data-customer-cancel-button>Cancelar</button></div>
+        </form>
+        <form method="post" action="/admin/clientes/status" class="customer-status-form"><input type="hidden" name="customer_id" value="{{ c.id }}"><input type="hidden" name="active" value="{{ 0 if c.active else 1 }}"><button class="btn btn-outline btn-sm" type="submit">{{ 'Desativar conta' if c.active else 'Reativar conta' }}</button></form>
+      </div>
+    </details>
+  </article>
+  {% endfor %}
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+  document.querySelectorAll(".customer-details").forEach((details) => {
+    const summaryHint = details.querySelector(".customer-summary-hint");
+    details.addEventListener("toggle", () => {
+      summaryHint.textContent = details.open ? "Ocultar dados" : "Ver dados";
+    });
+    const view = details.querySelector("[data-customer-view]");
+    const edit = details.querySelector("[data-customer-edit]");
+    const openEdit = details.querySelector("[data-customer-edit-button]");
+    const cancelEdit = details.querySelector("[data-customer-cancel-button]");
+    const setEditing = (editing) => {
+      view.hidden = editing;
+      edit.hidden = !editing;
+      if (editing) edit.querySelector("input:not([type=hidden])")?.focus();
+    };
+    openEdit.addEventListener("click", () => setEditing(true));
+    cancelEdit.addEventListener("click", () => setEditing(false));
+  });
+</script>
+{% endblock %}

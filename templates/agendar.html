@@ -19,6 +19,18 @@
 
   <!-- Passo 1: Serviço e Barbeiro -->
   <div id="panel1" class="card" style="padding:24px;">
+    {% if user and user.role in ['admin', 'barber'] %}
+    <div class="form-group">
+      <label for="customer_id">Cliente</label>
+      <select class="form-control" id="customer_id" required>
+        <option value="">Selecione o cliente</option>
+        {% for customer in customers %}
+        <option value="{{ customer.id }}">{{ customer.name }}{% if customer.phone %} — {{ customer.phone }}{% elif customer.cpf %} — CPF {{ customer.cpf }}{% endif %}</option>
+        {% endfor %}
+      </select>
+      {% if not customers %}<small class="text-muted">Não há clientes ativos com primeiro acesso concluído.</small>{% endif %}
+    </div>
+    {% endif %}
     <div class="form-group">
       <label>Escolha o serviço</label>
       <select class="form-control" id="service_id">
@@ -44,7 +56,7 @@
   <div id="panel2" class="card" style="padding:24px; display:none;">
     <div class="form-group">
       <label>Escolha o dia</label>
-      <input type="date" class="form-control" id="appt_date">
+      <input type="date" lang="pt-BR" class="form-control" id="appt_date">
     </div>
     <div id="slots-container">
       <p class="text-muted text-center">Selecione uma data para ver os horários disponíveis.</p>
@@ -83,7 +95,15 @@ if (urlParams.get('service')) {
 const today = new Date().toISOString().split('T')[0];
 document.getElementById('appt_date').min = today;
 
+const staffBooking = {{ 'true' if user and user.role in ['admin', 'barber'] else 'false' }};
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+}
 function goToStep(n) {
+  if (n > 1 && staffBooking && !document.getElementById('customer_id').value) {
+    showToast('Selecione o cliente para este agendamento.', 'error');
+    return;
+  }
   [1,2,3].forEach(i => {
     document.getElementById('panel'+i).style.display = (i===n) ? '' : 'none';
     const stepEl = document.getElementById('step'+i);
@@ -136,7 +156,9 @@ function buildSummary() {
   const date = document.getElementById('appt_date').value;
   const [y,m,d] = date.split('-');
   const dateFmt = `${d}/${m}/${y}`;
+  const customer = staffBooking ? document.getElementById('customer_id').selectedOptions[0].text : null;
   document.getElementById('summary').innerHTML = `
+    ${staffBooking ? `<div class="flex-between"><span class="text-muted">Cliente:</span><strong>${escapeHtml(customer)}</strong></div>` : ''}
     <div class="flex-between"><span class="text-muted">Serviço:</span><strong>${serviceText.split('—')[0].trim()}</strong></div>
     <div class="flex-between"><span class="text-muted">Barbeiro:</span><strong>${barber}</strong></div>
     <div class="flex-between"><span class="text-muted">Data:</span><strong>${dateFmt}</strong></div>
@@ -158,6 +180,7 @@ async function confirmBooking() {
       body: JSON.stringify({
         service_id: parseInt(document.getElementById('service_id').value),
         barber_id: parseInt(document.getElementById('barber_id').value),
+        customer_id: staffBooking ? parseInt(document.getElementById('customer_id').value) : undefined,
         date: document.getElementById('appt_date').value,
         start_time: selectedSlot,
         notes: document.getElementById('notes').value
@@ -166,7 +189,7 @@ async function confirmBooking() {
     const data = await res.json();
     if (data.ok) {
       showToast('Agendamento confirmado!', 'success');
-      setTimeout(() => window.location.href = '/area-cliente', 1500);
+      setTimeout(() => window.location.href = staffBooking ? `/admin/agenda?date=${document.getElementById('appt_date').value}` : '/area-cliente', 1500);
     } else {
       showToast(data.error || 'Erro ao agendar', 'error');
       btn.disabled = false; btn.textContent = 'Confirmar Agendamento';

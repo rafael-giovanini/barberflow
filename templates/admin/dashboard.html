@@ -10,6 +10,7 @@
     <a href="/admin/portfolio">📸 Portfólio</a>
     <a href="/admin/barbeiros">👤 Barbeiros</a>
     <a href="/admin/pedidos">📦 Pedidos</a>
+    {% if user.role == "admin" %}<a href="/admin/financeiro">💰 Financeiro</a>{% endif %}
     <a href="/app" target="_blank">📱 App Mobile</a>
     <a href="/admin/configuracoes">⚙️ Configurações</a>
     <a href="/">🌐 Ver Site</a>
@@ -18,7 +19,7 @@
 
   <div class="admin-content">
     <h1>Painel do Barbeiro</h1>
-    <p class="text-muted mb-4">Olá, {{ user.name }}! Hoje é {{ today }}.</p>
+    <p class="text-muted mb-4">Olá, {{ user.name }}! Hoje é {{ today|date_br }}.</p>
 
     <div class="stat-grid">
       <div class="stat-card">
@@ -27,7 +28,7 @@
       </div>
       <div class="stat-card">
         <div class="stat-value">R$ {{ "%.2f"|format(total_valor) }}</div>
-        <div class="stat-label">Faturamento Hoje</div>
+        <div class="stat-label">Valor previsto dos agendamentos</div>
       </div>
       <div class="stat-card">
         <div class="stat-value">{{ pending_orders }}</div>
@@ -42,6 +43,62 @@
         <div class="stat-label">Produtos na Loja</div>
       </div>
     </div>
+
+    {% if user.role == "admin" and management %}
+    <section class="form-card management-panel" style="margin:24px 0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div>
+          <h2 style="margin:0;color:var(--dourado);">Visão gerencial</h2>
+          <p class="text-muted" style="margin:6px 0 0;">Indicadores financeiros do mês selecionado e situação atual do estoque.</p>
+        </div>
+        <form method="GET" action="/admin" class="management-month-form" data-months-by-year='{{ available_months_by_year|tojson }}'>
+          <label class="management-month-label">Ano
+            <select class="form-control management-select" name="ano" data-year-select>
+              {% for year in available_years %}<option value="{{ year }}" {% if year == selected_year %}selected{% endif %}>{{ year }}</option>{% endfor %}
+            </select>
+          </label>
+          <label class="management-month-label">Mês
+            <select class="form-control management-select" name="mes_num" data-month-select>
+              {% for month in available_months %}<option value="{{ month.value }}" {% if month.value == selected_month_num %}selected{% endif %}>{{ month.label }}</option>{% endfor %}
+            </select>
+          </label>
+          <button class="btn btn-dourado btn-sm management-submit" type="submit">Atualizar painel</button>
+        </form>
+      </div>
+      <div class="stat-grid" style="margin-top:18px;">
+        <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(management.income_cents / 100) }}</div><div class="stat-label">Recebimentos confirmados no mês</div></div>
+        <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(management.expense_cents / 100) }}</div><div class="stat-label">Despesas pagas no mês</div></div>
+        <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(management.net_cents / 100) }}</div><div class="stat-label">Saldo financeiro do mês</div></div>
+        <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(management.pending_cents / 100) }}</div><div class="stat-label">Lançamentos pendentes</div></div>
+        <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(management.stock_value_cents / 100) }}</div><div class="stat-label">Valor estimado do estoque atual</div></div>
+        <div class="stat-card"><div class="stat-value">{{ management.low_stock_count }}</div><div class="stat-label">Produtos com estoque baixo (até 3 unidades)</div></div>
+      </div>
+      {% set chart_max = [management.income_cents, management.expense_cents, 1]|max %}
+      <h3 style="margin:24px 0 12px;">Comparativo financeiro do mês</h3>
+      <div style="display:grid;gap:14px;">
+        <div>
+          <div style="display:flex;justify-content:space-between;gap:10px;"><span>Recebimentos</span><strong>R$ {{ "%.2f"|format(management.income_cents / 100) }}</strong></div>
+          <div role="img" aria-label="Barra proporcional dos recebimentos do mês" style="height:14px;background:var(--cinza-claro,#e5e7eb);border-radius:7px;overflow:hidden;"><div style="height:100%;width:{{ (management.income_cents / chart_max * 100) }}%;background:var(--dourado,#b8860b);"></div></div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;gap:10px;"><span>Despesas pagas</span><strong>R$ {{ "%.2f"|format(management.expense_cents / 100) }}</strong></div>
+          <div role="img" aria-label="Barra proporcional das despesas pagas do mês" style="height:14px;background:var(--cinza-claro,#e5e7eb);border-radius:7px;overflow:hidden;"><div style="height:100%;width:{{ (management.expense_cents / chart_max * 100) }}%;background:#64748b;"></div></div>
+        </div>
+      </div>
+      <h3 style="margin:24px 0 12px;">Produção por barbeiro</h3>
+      {% if management.barbers %}
+      <div style="overflow-x:auto;">
+        <table class="admin-table">
+          <thead><tr><th>Barbeiro</th><th>Serviços concluídos</th><th>Produção estimada</th></tr></thead>
+          <tbody>{% for barber in management.barbers %}
+            <tr><td>{{ barber.barber_name }}</td><td>{{ barber.completed_services }}</td><td>R$ {{ "%.2f"|format(barber.production_cents / 100) }}</td></tr>
+          {% endfor %}</tbody>
+        </table>
+      </div>
+      {% else %}<p class="text-muted">Ainda não há serviços concluídos neste mês.</p>{% endif %}
+      <p class="text-muted" style="margin-top:12px;font-size:.9rem;">O saldo considera apenas lançamentos pagos/recebidos registrados no financeiro. O valor do estoque usa o custo médio cadastrado e o alerta de estoque baixo considera até 3 unidades por produto. A produção por barbeiro é estimativa operacional, não equivale necessariamente ao valor recebido.</p>
+    </section>
+    {% endif %}
 
     <h3 style="color:var(--dourado); margin-bottom:16px; text-transform:uppercase; letter-spacing:1px; font-size:1.1rem;">Agendamentos de Hoje</h3>
     {% if not today_appts %}
@@ -71,6 +128,25 @@
 {% endblock %}
 {% block scripts %}
 <script>
+  const monthForm = document.querySelector(".management-month-form");
+  if (monthForm) {
+    const monthsByYear = JSON.parse(monthForm.dataset.monthsByYear || "{}");
+    const yearSelect = monthForm.querySelector("[data-year-select]");
+    const monthSelect = monthForm.querySelector("[data-month-select]");
+    yearSelect.addEventListener("change", () => {
+      const previousMonth = monthSelect.value;
+      const options = monthsByYear[yearSelect.value] || [];
+      monthSelect.replaceChildren(...options.map((month) => {
+        const option = document.createElement("option");
+        option.value = month.value;
+        option.textContent = month.label;
+        return option;
+      }));
+      if (options.some((month) => month.value === previousMonth)) monthSelect.value = previousMonth;
+      else if (options.length) monthSelect.value = options[options.length - 1].value;
+    });
+  }
+
 async function updateStatus(id, status) {
   await fetch('/admin/agenda/status', {
     method:'POST', headers:{'Content-Type':'application/json'},

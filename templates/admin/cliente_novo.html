@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Cadastrar cliente — BarberFlow{% endblock %}
+{% block content %}
+<section class="section container" style="max-width:960px;">
+  <div class="form-card customer-registration-card">
+    <h2 class="section-title">Cadastrar cliente</h2>
+    <p class="text-muted">Informe os dados do cliente. Ele receberá um link no e-mail cadastrado para criar a própria senha.</p>
+    {% if request.query_params.get('salvo') %}
+      {% if request.query_params.get('email') == '1' %}<div class="success-msg">Cliente cadastrado. O link para criar a senha foi enviado ao e-mail informado.</div>
+      {% else %}<div class="success-msg">Cliente cadastrado. Para enviar o link de criação de senha, configure o SMTP e solicite o primeiro acesso.</div>{% endif %}
+    {% endif %}
+    {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
+    <form method="post" action="/admin/clientes/novo" class="customer-form-grid" data-address-form>
+      <div class="form-group"><label for="name">Nome completo</label><input id="name" type="text" name="name" class="form-control" value="{{ name }}" maxlength="120" autocomplete="name" required></div>
+      <div class="form-group"><label for="cpf">CPF</label><input id="cpf" type="text" name="cpf" data-mask="cpf" class="form-control" value="{{ cpf }}" inputmode="numeric" autocomplete="off" placeholder="000.000.000-00" required></div>
+      <div class="form-group"><label for="birth_date">Data de nascimento</label><input id="birth_date" type="date" name="birth_date" class="form-control" value="{{ birth_date }}" max="{{ today }}" required></div>
+      <div class="form-group"><label for="email">E-mail</label><input id="email" type="email" name="email" class="form-control" value="{{ email }}" maxlength="254" autocomplete="email" required></div>
+      <div class="form-group"><label for="phone">Telefone / WhatsApp</label><input id="phone" type="tel" name="phone" data-mask="phone" class="form-control" value="{{ phone }}" maxlength="40" autocomplete="tel" placeholder="(11) 99999-9999" required></div>
+      <h3 class="form-grid-full">Endereço</h3>
+      <div class="form-group"><label for="zip_code">CEP</label><input id="zip_code" type="text" name="zip_code" data-mask="cep" class="form-control" value="{{ zip_code }}" inputmode="numeric" autocomplete="postal-code" maxlength="9" placeholder="00000-000" required><small class="field-hint form-grid-full" data-cep-message aria-live="polite"></small></div>
+      <div class="form-group"><label for="address">Rua / Avenida</label><input id="address" type="text" name="address" class="form-control" value="{{ address }}" autocomplete="address-line1" required></div>
+      <div class="form-group"><label for="address_number">Número</label><input id="address_number" type="text" name="address_number" class="form-control" value="{{ address_number }}" required></div>
+      <div class="form-group"><label for="address_complement">Complemento <small>(opcional)</small></label><input id="address_complement" type="text" name="address_complement" class="form-control" value="{{ address_complement }}" autocomplete="address-line2"></div>
+      <div class="form-group"><label for="neighborhood">Bairro</label><input id="neighborhood" type="text" name="neighborhood" class="form-control" value="{{ neighborhood }}" required></div>
+      <div class="form-group"><label for="city">Cidade</label><input id="city" type="text" name="city" class="form-control" value="{{ city }}" autocomplete="address-level2" required></div>
+      <div class="form-group"><label for="state">Estado (UF)</label><input id="state" type="text" name="state" class="form-control" value="{{ state }}" minlength="2" maxlength="2" autocomplete="address-level1" required></div>
+      <button type="submit" class="btn btn-dourado btn-block form-grid-full">Cadastrar cliente</button>
+    </form>
+    {% if user.role == 'admin' %}<p class="text-center mt-2"><a href="/admin/clientes">Voltar à gestão de clientes</a></p>{% else %}<p class="text-center mt-2"><a href="/admin">Voltar ao painel</a></p>{% endif %}
+  </div>
+</section>
+{% endblock %}

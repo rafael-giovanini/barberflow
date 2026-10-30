@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Financeiro — BarberFlow{% endblock %}
+{% block content %}
+<div class="admin-layout">
+  <aside class="admin-sidebar">
+    <a href="/admin">📊 Dashboard</a>
+    <a href="/admin/agenda">📅 Agenda</a>
+    <a href="/admin/servicos">✂️ Serviços</a>
+    <a href="/admin/produtos">🛍️ Produtos</a>
+    <a href="/admin/portfolio">📸 Portfólio</a>
+    <a href="/admin/barbeiros">👤 Barbeiros</a>
+    <a href="/admin/pedidos">📦 Pedidos</a>
+    <a href="/admin/financeiro" class="active">💰 Financeiro</a>
+    <a href="/admin/configuracoes">⚙️ Configurações</a>
+    <a href="/">🌐 Ver Site</a>
+    <a href="/logout">🚪 Sair</a>
+  </aside>
+
+  <div class="admin-content">
+    <h1>Financeiro</h1>
+    <p class="text-muted mb-4">Registre movimentações e confirme o recebimento ou pagamento. Atendimentos concluídos entram como pendentes até o administrador confirmar o recebimento.</p>
+    {% if request.query_params.get('salvo') == 'estorno' %}
+    <p role="status" class="form-card">Estorno registrado. O lançamento original foi preservado e a contrapartida foi incluída no financeiro.</p>
+    {% elif request.query_params.get('erro') == 'estorno' %}
+    <p role="alert" class="form-card">Um lançamento pago não pode ser rebaixado de status. Use a ação “Registrar estorno” para criar a contrapartida financeira.</p>
+    {% elif request.query_params.get('erro') == 'estorno_existente' %}
+    <p role="alert" class="form-card">Este lançamento já possui estorno registrado. Não é possível registrar outro.</p>
+    {% elif request.query_params.get('erro') == 'estorno_indisponivel' %}
+    <p role="alert" class="form-card">Só é possível estornar um lançamento pago original. Verifique o status e se ele já foi estornado.</p>
+    {% endif %}
+
+    <form method="GET" class="flex mb-4" style="gap:12px; flex-wrap:wrap;">
+      <label>De <input type="date" lang="pt-BR" name="inicio" value="{{ inicio }}" required></label>
+      <label>Até <input type="date" lang="pt-BR" name="fim" value="{{ fim }}" required></label>
+      <button class="btn btn-outline btn-sm" type="submit">Filtrar</button>
+      <a class="btn btn-dourado btn-sm" href="/admin/financeiro/exportar.csv?inicio={{ inicio }}&fim={{ fim }}">Exportar CSV</a>
+    </form>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(totals.income_cents / 100) }}</div><div class="stat-label">Entradas recebidas</div></div>
+      <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(totals.expense_cents / 100) }}</div><div class="stat-label">Despesas pagas</div></div>
+      <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(net_cents / 100) }}</div><div class="stat-label">Saldo do período</div></div>
+      <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(totals.pending_cents / 100) }}</div><div class="stat-label">Lançamentos pendentes</div></div>
+      <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format(stock_costs.cogs_cents / 100) }}</div><div class="stat-label">Custo estimado dos produtos vendidos</div></div>
+      <div class="stat-card"><div class="stat-value">R$ {{ "%.2f"|format((store_revenue.income_cents - stock_costs.cogs_cents) / 100) }}</div><div class="stat-label">Margem bruta estimada da loja</div></div>
+    </div>
+
+    <h3 style="color:var(--dourado); margin:28px 0 16px;">Novo lançamento</h3>
+    <form method="POST" action="/admin/financeiro/lancamento" class="form-card financial-entry-form">
+      <label>Tipo
+        <select name="transaction_type" required><option value="income">Entrada</option><option value="expense">Despesa</option></select>
+      </label>
+      <label>Categoria <input name="category" maxlength="80" required placeholder="Ex.: aluguel, produto, serviço"></label>
+      <label>Descrição <input name="description" maxlength="240" required placeholder="Detalhes do lançamento"></label>
+      <label>Valor (R$) <input name="amount" inputmode="decimal" required placeholder="0,00"></label>
+      <label>Data <input type="date" lang="pt-BR" name="occurred_on" value="{{ fim }}" required></label>
+      <label>Forma de pagamento <input name="payment_method" maxlength="40" placeholder="Pix, dinheiro, cartão..."></label>
+      <label>Status
+        <select name="status" required><option value="paid">Pago/recebido</option><option value="pending">Pendente</option><option value="cancelled">Cancelado</option></select>
+      </label>
+      <div class="financial-entry-submit"><button class="btn btn-dourado" type="submit">Salvar lançamento</button></div>
+    </form>
+
+    <p class="text-muted">Custo e margem da loja são estimativas: dependem dos custos cadastrados e do histórico de vendas a partir da implantação. Produtos antigos sem custo registrado podem aparecer com custo zero.</p>
+
+    <h3 style="color:var(--dourado); margin:28px 0 16px;">Evolução mensal</h3>
+    {% set max_month_value = ([1] + (monthly | map(attribute='income_cents') | list) + (monthly | map(attribute='expense_cents') | list)) | max %}
+    {% if monthly %}
+      <div class="form-card" style="display:grid;gap:16px;">
+      {% for m in monthly %}
+        <div>
+          <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;"><strong>{{ m.month[5:7] }}/{{ m.month[:4] }}</strong><span>Entradas R$ {{ "%.2f"|format(m.income_cents / 100) }} · Despesas R$ {{ "%.2f"|format(m.expense_cents / 100) }}</span></div>
+          <div style="height:12px;background:var(--cinza-claro, #e5e7eb);border-radius:6px;overflow:hidden;margin-top:6px;"><div title="Entradas" style="height:100%;width:{{ (m.income_cents / max_month_value * 100) }}%;background:var(--dourado, #b8860b);"></div></div>
+          <div style="height:6px;background:var(--cinza-claro, #e5e7eb);border-radius:6px;overflow:hidden;margin-top:4px;"><div title="Despesas" style="height:100%;width:{{ (m.expense_cents / max_month_value * 100) }}%;background:#64748b;"></div></div>
+        </div>
+      {% endfor %}
+      <small class="text-muted">Barra superior: entradas recebidas. Barra inferior: despesas pagas. Os gráficos respeitam o período filtrado.</small>
+      </div>
+    {% else %}<p class="text-muted">Sem movimentações financeiras no período para exibir o gráfico.</p>{% endif %}
+
+    <h3 style="color:var(--dourado); margin:28px 0 16px;">Desempenho dos produtos</h3>
+    <p class="text-muted">Relatório estimado com base nas vendas registradas no estoque, preço do item no pedido e custo unitário registrado no momento da venda. Não inclui taxas de cartão, impostos ou outras despesas operacionais.</p>
+    {% if product_performance %}
+    <table class="admin-table">
+      <thead><tr><th>Produto</th><th>Quantidade vendida</th><th>Vendas registradas</th><th>Custo estimado</th><th>Margem bruta estimada</th></tr></thead>
+      <tbody>
+      {% for p in product_performance %}
+        <tr>
+          <td>{{ p.product_name }}</td>
+          <td>{{ p.quantity_sold }}</td>
+          <td>R$ {{ "%.2f"|format(p.sales_cents / 100) }}</td>
+          <td>R$ {{ "%.2f"|format(p.cost_cents / 100) }}</td>
+          <td>R$ {{ "%.2f"|format((p.sales_cents - p.cost_cents) / 100) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-muted">Nenhuma venda de produto registrada no período selecionado.</p>
+    {% endif %}
+
+    <h3 style="color:var(--dourado); margin:28px 0 16px;">Produção por barbeiro</h3>
+    <p class="text-muted">Produção baseada no preço registrado no momento do agendamento. Comissão é estimativa e não representa pagamento de comissão.</p>
+    {% if production %}
+    <table class="admin-table">
+      <thead><tr><th>Barbeiro</th><th>Serviços concluídos</th><th>Produção estimada</th><th>Comissão cadastrada</th><th>Comissão estimada</th></tr></thead>
+      <tbody>
+      {% for b in production %}
+        <tr>
+          <td>{{ b.barber_name }}</td>
+          <td>{{ b.completed_services }}</td>
+          <td>R$ {{ "%.2f"|format(b.production_cents / 100) }}</td>
+          <td><form method="POST" action="/admin/financeiro/comissao" style="display:flex;gap:6px;align-items:center;"><input type="hidden" name="barber_id" value="{{ b.barber_id }}"><input type="number" name="commission_percent" min="0" max="100" step="0.01" value="{{ "%.2f"|format(b.commission_percent) }}" required style="width:90px;"><button class="btn btn-outline btn-sm" type="submit">Salvar</button></form></td>
+          <td>R$ {{ "%.2f"|format((b.production_cents * b.commission_percent / 100) / 100) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="text-muted">Nenhum barbeiro ativo cadastrado.</p>{% endif %}
+
+    <h3 style="color:var(--dourado); margin:28px 0 16px;">Lançamentos do período</h3>
+    {% if transactions %}
+    <table class="admin-table">
+      <thead><tr><th>Data</th><th>Tipo</th><th>Categoria / descrição</th><th>Forma</th><th>Status</th><th>Valor</th></tr></thead>
+      <tbody>
+      {% for t in transactions %}
+        <tr>
+          <td>{{ t.occurred_on|date_br }}</td>
+          <td>{{ "Entrada" if t.transaction_type == "income" else "Despesa" }}</td>
+          <td>{{ t.category }}<br><small class="text-muted">{{ t.description }}</small></td>
+          <td>{{ t.payment_method or "—" }}</td>
+          <td>{{ {"paid":"Pago/recebido","pending":"Pendente","cancelled":"Cancelado"}.get(t.status, t.status) }}
+            {% if t.reversal_of_id %}<br><small class="text-muted">Estorno do lançamento #{{ t.reversal_of_id }}</small>{% elif t.has_reversal %}<br><small class="text-muted">Estornado por lançamento vinculado</small>{% endif %}
+            {% if t.status == "paid" and not t.reversal_of_id and not t.has_reversal %}
+            <form method="POST" action="/admin/financeiro/estornar" style="margin-top:6px;">
+              <input type="hidden" name="transaction_id" value="{{ t.id }}">
+              <button class="btn btn-outline btn-sm" type="submit" onclick="return confirm('Registrar estorno de R$ {{ "%.2f"|format(t.amount_cents / 100) }}? O lançamento original será preservado e será criada uma contrapartida.');">Registrar estorno</button>
+            </form>
+            {% endif %}
+            {% if t.status != "cancelled" %}
+            <form method="POST" action="/admin/financeiro/confirmar" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;">
+              <input type="hidden" name="transaction_id" value="{{ t.id }}">
+              <select name="status" aria-label="Atualizar status do lançamento">
+                <option value="paid">Confirmar pago/recebido</option>
+                <option value="pending">Manter pendente</option>
+                <option value="cancelled">Cancelar</option>
+              </select>
+              <button class="btn btn-outline btn-sm" type="submit">Atualizar</button>
+            </form>
+            {% endif %}
+          </td>
+          <td>R$ {{ "%.2f"|format(t.amount_cents / 100) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="text-muted">Nenhum lançamento encontrado nesse período.</p>{% endif %}
+  </div>
+</div>
+{% endblock %}

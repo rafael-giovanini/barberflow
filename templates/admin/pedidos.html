@@ -10,6 +10,7 @@
     <a href="/admin/portfolio">📸 Portfólio</a>
     <a href="/admin/barbeiros">👤 Barbeiros</a>
     <a href="/admin/pedidos" class="active">📦 Pedidos</a>
+    {% if user.role == "admin" %}<a href="/admin/financeiro">💰 Financeiro</a>{% endif %}
     <a href="/app" target="_blank">📱 App Mobile</a>
     <a href="/admin/configuracoes">⚙️ Configurações</a>
     <a href="/">🌐 Ver Site</a>
@@ -18,6 +19,11 @@
 
   <div class="admin-content">
     <h1>Pedidos da Loja Online</h1>
+    {% if request.query_params.get('erro') == 'estorno' %}
+    <p role="alert" class="form-card">Este pedido já foi pago. Registre o estorno no Financeiro antes de cancelar o pedido; o estoque só será devolvido após essa confirmação.</p>
+    {% elif request.query_params.get('erro') == 'cancelado' %}
+    <p role="alert" class="form-card">Um pedido cancelado não pode ser reaberto automaticamente. Verifique o estoque antes de criar um novo pedido.</p>
+    {% endif %}
 
     {% if not orders %}
     <p class="text-muted">Nenhum pedido ainda.</p>
@@ -29,13 +35,26 @@
       <tbody>
         {% for o in orders %}
         <tr>
-          <td><strong>#{{ o.id }}</strong><br><small class="text-muted">{{ o.created_at[:16] }}</small></td>
+          <td><strong>#{{ o.id }}</strong><br><small class="text-muted">{{ o.created_at[:10]|date_br }} {{ o.created_at[11:16] }}</small></td>
           <td>{{ o.customer_name }}<br><small class="text-muted">{{ o.customer_phone }}</small></td>
           <td style="max-width:200px;"><small>{{ o.items_summary }}</small></td>
           <td class="text-dourado">R$ {{ "%.2f"|format(o.total) }}</td>
           <td><small>{{ o.address }}</small></td>
           <td><small>{{ o.payment_method }}</small></td>
-          <td><span class="badge badge-{{ o.status }}">{{ o.status }}</span></td>
+          <td>
+            <span class="badge badge-{{ o.status }}">{{ o.status }}</span>
+            {% if user.role == "admin" %}
+            <form method="POST" action="/admin/pedidos/status" style="display:grid;gap:5px;margin-top:6px;">
+              <input type="hidden" name="order_id" value="{{ o.id }}">
+              <select name="status" aria-label="Status do pedido #{{ o.id }}">
+                <option value="pending" {% if o.status == "pending" %}selected{% endif %}>Pendente</option>
+                <option value="paid" {% if o.status == "paid" %}selected{% endif %}>Pago</option>
+                <option value="cancelled" {% if o.status == "cancelled" %}selected{% endif %}>Cancelado</option>
+              </select>
+              <button class="btn btn-outline btn-sm" type="submit">Atualizar</button>
+            </form>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>

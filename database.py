@@ -6,7 +6,10 @@ import sqlite3
 import os
 from datetime import datetime
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "barbearia.db")
+DB_PATH = os.getenv(
+    "DATABASE_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "barbearia.db"),
+)
 
 
 def get_db():
@@ -27,7 +30,17 @@ def init_db():
         name TEXT NOT NULL,
         email TEXT UNIQUE NOT NULL,
         phone TEXT,
+        cpf TEXT,
+        birth_date TEXT,
+        zip_code TEXT,
+        address TEXT,
+        address_number TEXT,
+        address_complement TEXT,
+        neighborhood TEXT,
+        city TEXT,
+        state TEXT,
         password_hash TEXT NOT NULL,
+        first_access_required INTEGER NOT NULL DEFAULT 0,
         role TEXT NOT NULL DEFAULT 'customer',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
@@ -98,6 +111,29 @@ def init_db():
     )
     """)
 
+    # Custo unitário e trilha de auditoria do estoque, com migração não destrutiva.
+    product_columns = {row["name"] for row in c.execute("PRAGMA table_info(products)").fetchall()}
+    if "cost_price" not in product_columns:
+        c.execute("ALTER TABLE products ADD COLUMN cost_price REAL NOT NULL DEFAULT 0")
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS stock_movements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER NOT NULL,
+        movement_type TEXT NOT NULL CHECK (movement_type IN ('opening', 'purchase', 'sale', 'adjustment', 'return')),
+        quantity INTEGER NOT NULL CHECK (quantity <> 0),
+        unit_cost_cents INTEGER NOT NULL DEFAULT 0 CHECK (unit_cost_cents >= 0),
+        note TEXT,
+        order_id INTEGER,
+        created_by INTEGER,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (product_id) REFERENCES products(id),
+        FOREIGN KEY (order_id) REFERENCES orders(id),
+        FOREIGN KEY (created_by) REFERENCES users(id)
+    )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_stock_movements_product_date ON stock_movements(product_id, created_at DESC)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_stock_movements_order ON stock_movements(order_id)")
+
     # Portfólio (modelos de corte com explicação)
     c.execute("""
     CREATE TABLE IF NOT EXISTS portfolio (
@@ -151,6 +187,142 @@ def init_db():
     )
     """)
 
+
+    # Snapshot de preço para preservar histórico mesmo se o serviço mudar de preço.
+    appointment_columns = {row["name"] for row in c.execute("PRAGMA table_info(appointments)").fetchall()}
+    if "service_price_cents" not in appointment_columns:
+        c.execute("ALTER TABLE appointments ADD COLUMN service_price_cents INTEGER")
+        c.execute("""
+            UPDATE appointments
+            SET service_price_cents = (
+                SELECT CAST(ROUND(price * 100) AS INTEGER)
+                FROM services WHERE services.id = appointments.service_id
+            )
+            WHERE service_price_cents IS NULL
+        """)
+
+    # Migração compatível: acrescenta campos sem remover ou recriar registros.
+    user_columns = {row["name"] for row in c.execute("PRAGMA table_info(users)").fetchall()}
+    if "active" not in user_columns:
+        c.execute("ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+    if "session_version" not in user_columns:
+        c.execute("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0")
+    for column, definition in (
+        ("cpf", "TEXT"),
+        ("birth_date", "TEXT"),
+        ("zip_code", "TEXT"),
+        ("address", "TEXT"),
+        ("address_number", "TEXT"),
+        ("address_complement", "TEXT"),
+        ("neighborhood", "TEXT"),
+        ("city", "TEXT"),
+        ("state", "TEXT"),
+        ("first_access_required", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if column not in user_columns:
+            c.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
+    c.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_cpf_unique
+        ON users(cpf) WHERE cpf IS NOT NULL AND cpf != ''
+    """)
+
+    # Tentativas de autenticação para limitação de força bruta, persistentes entre reinicializações.
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS auth_login_attempts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL,
+        client_ip TEXT NOT NULL,
+        attempted_at TEXT NOT NULL,
+        succeeded INTEGER NOT NULL DEFAULT 0
+    )
+    """)
+    c.execute("""
+    CREATE INDEX IF NOT EXISTS idx_auth_login_attempts_lookup
+    ON auth_login_attempts(email, client_ip, attempted_at, succeeded)
+    """)
+
+    # Tokens de recuperação: apenas o hash é armazenado; o token em claro só vai por e-mail.
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        email TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        used_at TEXT,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    """)
+    c.execute("""
+    CREATE INDEX IF NOT EXISTS idx_password_reset_email_created
+    ON password_reset_tokens(email, created_at)
+    """)
+
+
+    # Financeiro: lançamentos manuais e configuração de comissão por barbeiro.
+    # Valores monetários são armazenados em centavos para evitar erros de ponto flutuante.
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS financial_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        transaction_type TEXT NOT NULL CHECK (transaction_type IN ('income', 'expense')),
+        category TEXT NOT NULL,
+        description TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+        occurred_on TEXT NOT NULL,
+        payment_method TEXT,
+        status TEXT NOT NULL DEFAULT 'paid'
+            CHECK (status IN ('pending', 'paid', 'cancelled')),
+        barber_id INTEGER,
+        order_id INTEGER,
+        appointment_id INTEGER,
+        created_by INTEGER,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (barber_id) REFERENCES barbers(id),
+        FOREIGN KEY (order_id) REFERENCES orders(id),
+        FOREIGN KEY (appointment_id) REFERENCES appointments(id),
+        FOREIGN KEY (created_by) REFERENCES users(id)
+    )
+    """)
+    c.execute("""
+    CREATE INDEX IF NOT EXISTS idx_financial_transactions_date_status
+    ON financial_transactions(occurred_on, status, transaction_type)
+    """)
+
+    financial_columns = {row["name"] for row in c.execute("PRAGMA table_info(financial_transactions)").fetchall()}
+    if "reversal_of_id" not in financial_columns:
+        c.execute("ALTER TABLE financial_transactions ADD COLUMN reversal_of_id INTEGER REFERENCES financial_transactions(id)")
+    c.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_transactions_reversal_unique
+        ON financial_transactions(reversal_of_id)
+        WHERE reversal_of_id IS NOT NULL
+    """)
+    if "appointment_id" not in financial_columns:
+        c.execute("ALTER TABLE financial_transactions ADD COLUMN appointment_id INTEGER REFERENCES appointments(id)")
+    c.execute("""
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_transactions_appointment_unique
+    ON financial_transactions(appointment_id)
+    WHERE appointment_id IS NOT NULL
+    """)
+    # Impede duplicar a receita associada ao mesmo pedido da loja.
+    financial_columns = {row["name"] for row in c.execute("PRAGMA table_info(financial_transactions)").fetchall()}
+    if "order_id" not in financial_columns:
+        c.execute("ALTER TABLE financial_transactions ADD COLUMN order_id INTEGER REFERENCES orders(id)")
+    c.execute("""
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_transactions_order_unique
+    ON financial_transactions(order_id)
+    WHERE order_id IS NOT NULL
+    """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS barber_commission_settings (
+        barber_id INTEGER PRIMARY KEY,
+        commission_percent REAL NOT NULL DEFAULT 0
+            CHECK (commission_percent >= 0 AND commission_percent <= 100),
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (barber_id) REFERENCES barbers(id)
+    )
+    """)
+
     conn.commit()
 
     # Sempre garante configurações padrão
@@ -160,6 +332,28 @@ def init_db():
     c.execute("SELECT COUNT(*) FROM services")
     if c.fetchone()[0] == 0:
         seed_data(conn)
+
+    # Cria o primeiro administrador mesmo quando os dados de exemplo já existem.
+    # Isso permite configurar credenciais após a instalação inicial.
+    admin_email = os.getenv("INITIAL_ADMIN_EMAIL", "").strip().lower()
+    admin_password = os.getenv("INITIAL_ADMIN_PASSWORD", "")
+    if admin_email and admin_password:
+        from auth import hash_password
+        existing_admin = c.execute(
+            "SELECT id FROM users WHERE role='admin' LIMIT 1"
+        ).fetchone()
+        if not existing_admin:
+            admin_hash = hash_password(admin_password)
+            c.execute(
+                "INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
+                ("Administrador", admin_email, "", admin_hash, "admin")
+            )
+            admin_id = c.lastrowid
+            c.execute(
+                "INSERT INTO barbers (user_id, name, bio, active) VALUES (?,?,?,?)",
+                (admin_id, "Administrador", "", 1)
+            )
+            conn.commit()
 
     conn.close()
 
@@ -200,6 +394,10 @@ def get_settings(conn=None):
     rows = conn.execute("SELECT key, value FROM settings").fetchall()
     settings = dict(DEFAULT_SETTINGS)
     for r in rows:
+        # A credencial SMTP criptografada é consumida somente pelo serviço de e-mail;
+        # não a propaga aos contextos de template enviados às páginas.
+        if r["key"] == "smtp_password_encrypted":
+            continue
         settings[r["key"]] = r["value"]
     # Gera token do calendário se não existir
     if not settings.get("calendar_token"):
@@ -259,18 +457,8 @@ def seed_data(conn):
     for p in portfolio:
         c.execute("INSERT INTO portfolio (name, description, image_url, category, service_id) VALUES (?,?,?,?,?)", p)
 
-    # Barbeiro padrão (admin) - senha: admin123
-    from auth import hash_password
-    admin_hash = hash_password("admin123")
-    c.execute("INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
-              ("Barbeiro Chefe", "admin@barbearia.com", "18999999999", admin_hash, "admin"))
-    admin_id = c.lastrowid
-    c.execute("INSERT INTO barbers (user_id, name, bio, active) VALUES (?,?,?,?)",
-              (admin_id, "Barbeiro Chefe", "Especialista em cortes modernos e degradê há 10 anos.", 1))
-
     conn.commit()
-    print("✅ Dados iniciais inseridos!")
-    print("   Login admin: admin@barbearia.com / senha: admin123")
+    print("Dados iniciais inseridos.")
 
 
 if __name__ == "__main__":

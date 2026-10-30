@@ -10,6 +10,7 @@
     <a href="/admin/portfolio">📸 Portfólio</a>
     <a href="/admin/barbeiros">👤 Barbeiros</a>
     <a href="/admin/pedidos">📦 Pedidos</a>
+    {% if user.role == "admin" %}<a href="/admin/financeiro">💰 Financeiro</a>{% endif %}
     <a href="/app" target="_blank">📱 App Mobile</a>
     <a href="/admin/configuracoes">⚙️ Configurações</a>
     <a href="/">🌐 Ver Site</a>
@@ -18,12 +19,44 @@
 
   <div class="admin-content">
     <h1>Gerenciar Produtos da Loja</h1>
+    {% if request.query_params.get('salvo') %}<div class="success-msg">Produto salvo com sucesso.</div>{% endif %}
+    {% if request.query_params.get('imagem_erro') == 'tamanho' %}<div class="error-msg">A imagem deve ter no máximo 3 MB.</div>{% elif request.query_params.get('imagem_erro') == 'formato' %}<div class="error-msg">Envie uma imagem PNG, JPG ou WebP.</div>{% elif request.query_params.get('erro') == 'imagem' %}<div class="error-msg">Informe um link público válido para a imagem.</div>{% endif %}
 
     <button class="btn btn-dourado btn-sm mb-4" onclick="openModal()">+ Novo Produto</button>
 
+    {% if user.role == 'admin' %}
+    <section style="border:1px solid var(--border-color, #ddd); border-radius:10px; padding:16px; margin-bottom:20px;">
+      <h2>Registrar entrada de estoque</h2>
+      <p class="text-muted">Registre compras e reposições. O sistema atualiza o saldo e recalcula o custo médio ponderado.</p>
+      <form method="POST" action="/admin/estoque/entrada" class="flex" style="align-items:end; gap:12px; flex-wrap:wrap;">
+        <div class="form-group" style="flex:2; min-width:180px;">
+          <label>Produto</label>
+          <select name="product_id" class="form-control" required>
+            {% for p in products if p.active %}
+            <option value="{{ p.id }}">{{ p.name }} (saldo: {{ p.stock }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group" style="flex:1; min-width:100px;">
+          <label>Quantidade</label>
+          <input type="number" name="quantity" min="1" max="1000000" class="form-control" required>
+        </div>
+        <div class="form-group" style="flex:1; min-width:130px;">
+          <label>Custo unitário (R$)</label>
+          <input type="number" name="unit_cost" min="0" step="0.01" class="form-control" required>
+        </div>
+        <div class="form-group" style="flex:2; min-width:160px;">
+          <label>Fornecedor / observação</label>
+          <input type="text" name="note" maxlength="500" class="form-control" placeholder="Ex.: compra fornecedor">
+        </div>
+        <button type="submit" class="btn btn-dourado">Registrar entrada</button>
+      </form>
+    </section>
+    {% endif %}
+
     <table class="admin-table">
       <thead>
-        <tr><th>Produto</th><th>Categoria</th><th>Preço</th><th>Estoque</th><th>Ações</th></tr>
+        <tr><th>Produto</th><th>Categoria</th><th>Preço</th><th>Custo</th><th>Estoque</th><th>Ações</th></tr>
       </thead>
       <tbody>
         {% for p in products %}
@@ -31,6 +64,7 @@
           <td><strong>{{ p.name }}</strong><br><small class="text-muted">{{ p.description[:40] }}</small></td>
           <td>{{ p.category }}</td>
           <td class="text-dourado">R$ {{ "%.2f"|format(p.price) }}</td>
+          <td>R$ {{ "%.2f"|format(p.cost_price or 0) }}</td>
           <td>{% if p.stock <= 3 %}<span class="text-danger">{{ p.stock }}</span>{% else %}{{ p.stock }}{% endif %}</td>
           <td>
             <button class="btn btn-outline btn-sm" onclick='editProduct({{ p|tojson }})'>Editar</button>
@@ -50,7 +84,7 @@
   <div class="modal">
     <button class="modal-close" onclick="closeModal()">✕</button>
     <h3 id="modal-title">Novo Produto</h3>
-    <form method="POST" action="/admin/produtos/salvar">
+    <form method="POST" action="/admin/produtos/salvar" enctype="multipart/form-data">
       <input type="hidden" name="product_id" id="f_id">
       <div class="form-group">
         <label>Nome do produto</label>
@@ -66,6 +100,10 @@
           <input type="number" step="0.01" name="price" id="f_price" class="form-control" required>
         </div>
         <div class="form-group" style="flex:1;">
+          <label>Custo unitário (R$)</label>
+          <input type="number" min="0" step="0.01" name="cost_price" id="f_cost" class="form-control" value="0" required>
+        </div>
+        <div class="form-group" style="flex:1;">
           <label>Estoque</label>
           <input type="number" name="stock" id="f_stock" class="form-control" value="10" required>
         </div>
@@ -78,12 +116,34 @@
         </select>
       </div>
       <div class="form-group">
-        <label>URL da imagem (opcional)</label>
-        <input type="url" name="image_url" id="f_img" class="form-control" placeholder="https://...">
+        <label>Imagem do produto por link (opcional)</label>
+        <input type="text" name="image_url" id="f_img" class="form-control" placeholder="https://site.com/imagem.png">
+        <small class="text-muted">Ou envie do computador: PNG, JPG ou WebP, até 3 MB. O arquivo enviado substitui o link.</small>
+        <input type="file" name="image_file" id="f_image_file" class="form-control" accept="image/png,image/jpeg,image/webp">
       </div>
       <button type="submit" class="btn btn-dourado btn-block">Salvar</button>
     </form>
   </div>
+</div>
+<div style="margin: 24px 0;">
+  <h2>Movimentações recentes de estoque</h2>
+  <p class="text-muted">Últimos 100 registros. Vendas são registradas automaticamente no fechamento do pedido.</p>
+  <table class="admin-table">
+    <thead><tr><th>Data</th><th>Produto</th><th>Movimento</th><th>Quantidade</th><th>Custo unitário</th><th>Observação</th><th>Responsável</th></tr></thead>
+    <tbody>
+      {% for m in movements %}
+      <tr>
+        <td>{{ m.created_at[:10]|date_br }} {{ m.created_at[11:16] }}</td><td>{{ m.product_name }}</td>
+        <td>{{ {'opening':'Saldo inicial','purchase':'Entrada/compra','sale':'Venda','adjustment':'Ajuste','return':'Devolução'}.get(m.movement_type, m.movement_type) }}</td>
+        <td>{% if m.quantity > 0 %}+{% endif %}{{ m.quantity }}</td>
+        <td>R$ {{ "%.2f"|format(m.unit_cost_cents / 100) }}</td>
+        <td>{{ m.note or '—' }}</td><td>{{ m.user_name or 'Sistema/cliente' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7">Nenhuma movimentação registrada ainda.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </div>
 {% endblock %}
 {% block scripts %}
@@ -91,7 +151,9 @@
 function openModal() {
   document.getElementById('modal-title').textContent = 'Novo Produto';
   ['f_id','f_name','f_desc','f_price','f_img'].forEach(i => document.getElementById(i).value = '');
+  document.getElementById('f_image_file').value = '';
   document.getElementById('f_stock').value = '10';
+  document.getElementById('f_cost').value = '0';
   document.getElementById('modal').classList.add('open');
 }
 function closeModal() { document.getElementById('modal').classList.remove('open'); }
@@ -101,9 +163,11 @@ function editProduct(p) {
   document.getElementById('f_name').value = p.name;
   document.getElementById('f_desc').value = p.description || '';
   document.getElementById('f_price').value = p.price;
+  document.getElementById('f_cost').value = p.cost_price || 0;
   document.getElementById('f_stock').value = p.stock;
   document.getElementById('f_cat').value = p.category;
   document.getElementById('f_img').value = p.image_url || '';
+  document.getElementById('f_image_file').value = '';
   document.getElementById('modal').classList.add('open');
 }
 document.getElementById('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });

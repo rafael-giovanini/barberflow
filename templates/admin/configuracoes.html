@@ -10,6 +10,7 @@
     <a href="/admin/portfolio">📸 Portfólio</a>
     <a href="/admin/barbeiros">👤 Barbeiros</a>
     <a href="/admin/pedidos">📦 Pedidos</a>
+    {% if user.role == "admin" %}<a href="/admin/financeiro">💰 Financeiro</a>{% endif %}
     <a href="/app" target="_blank">📱 App Mobile</a>
     <a href="/admin/configuracoes" class="active">⚙️ Configurações</a>
     <a href="/">🌐 Ver Site</a>
@@ -23,6 +24,95 @@
     {% if request.query_params.get('salvo') %}
     <div class="success-msg">✅ Configurações salvas! <a href="/" target="_blank">Ver o site</a></div>
     {% endif %}
+    {% if request.query_params.get('logo_erro') == 'tamanho' %}
+    <div class="error-msg">A imagem do logo deve ter no máximo 3 MB.</div>
+    {% elif request.query_params.get('logo_erro') == 'formato' %}
+    <div class="error-msg">Formato inválido. Envie uma imagem PNG, JPG ou WebP.</div>
+    {% elif request.query_params.get('logo_erro') == 'url' %}
+    <div class="error-msg">Informe um link válido começando com http:// ou https://.</div>
+    {% endif %}
+
+    <section class="card mb-4" style="padding:24px;">
+      <h3 style="color:var(--dourado); margin-bottom:8px;">✉️ Envio de e-mails (SMTP)</h3>
+      <p class="text-muted" style="margin-bottom:16px;">Configure o provedor para enviar links de primeiro acesso e recuperação de senha. A senha é armazenada criptografada e nunca volta a aparecer no formulário.</p>
+      {% if request.query_params.get('smtp_salvo') %}<div class="success-msg">✅ Configuração de e-mail salva.</div>{% endif %}
+      {% if request.query_params.get('smtp_erro') == 'porta' %}<div class="error-msg">Informe uma porta entre 1 e 65535.</div>{% endif %}
+      {% if request.query_params.get('smtp_erro') == 'senha' %}<div class="error-msg">Informe a senha SMTP para o usuário configurado, ou mantenha a senha já salva.</div>{% endif %}
+      {% if request.query_params.get('smtp_erro') == 'campos' %}<div class="error-msg">Para ativar o envio, informe o servidor SMTP e um remetente válido.</div>{% endif %}
+      {% if request.query_params.get('smtp_erro') == 'url' %}<div class="error-msg">A URL pública precisa começar com https:// e não pode apontar para localhost.</div>{% endif %}
+      {% if request.query_params.get('smtp_erro') == 'chave' %}<div class="error-msg">Configure uma SECRET_KEY persistente com pelo menos 32 caracteres no Docker antes de salvar a senha.</div>{% endif %}
+      {% if request.query_params.get('smtp_teste') == 'sucesso' %}<div class="success-msg">✅ E-mail de teste enviado. Confira a caixa de entrada do destinatário.</div>{% endif %}
+      {% if request.query_params.get('smtp_teste') == 'destinatario' %}<div class="error-msg">Informe um endereço de e-mail válido para o teste.</div>{% endif %}
+      {% if request.query_params.get('smtp_teste') == 'configuracao' %}<div class="error-msg">Salve uma configuração SMTP ativa, com URL pública HTTPS, antes de testar.</div>{% endif %}
+      {% if request.query_params.get('smtp_teste') == 'senha' %}<div class="error-msg">A autenticação SMTP está sem senha. Informe e salve a credencial.</div>{% endif %}
+      {% if request.query_params.get('smtp_teste') == 'erro_envio' %}<div class="error-msg">Não foi possível enviar. Confira servidor, porta, TLS e credenciais com o provedor.</div>{% endif %}
+      {% if smtp_settings.password_unavailable %}<div class="error-msg">A senha salva não pode ser descriptografada. Informe-a novamente e salve; confira também se a SECRET_KEY do Docker foi mantida.</div>{% endif %}
+
+      <form method="POST" action="/admin/configuracoes/smtp/salvar" autocomplete="off">
+        <div class="form-group" style="margin-bottom:16px;">
+          <label style="display:flex; align-items:center; gap:10px; cursor:pointer;">
+            <input type="checkbox" name="smtp_enabled" value="1" {% if smtp_settings.enabled %}checked{% endif %} style="width:auto;">
+            Ativar envio de e-mails
+          </label>
+        </div>
+        <div class="grid grid-2" style="gap:16px;">
+          <div class="form-group">
+            <label for="smtp_host">Servidor SMTP</label>
+            <input id="smtp_host" type="text" name="smtp_host" class="form-control" value="{{ smtp_settings.host }}" placeholder="smtp.seuprovedor.com">
+          </div>
+          <div class="form-group">
+            <label for="smtp_port">Porta</label>
+            <input id="smtp_port" type="number" name="smtp_port" min="1" max="65535" class="form-control" value="{{ smtp_settings.port or '587' }}" required>
+          </div>
+          <div class="form-group">
+            <label for="smtp_user">Usuário SMTP</label>
+            <input id="smtp_user" type="text" name="smtp_user" class="form-control" value="{{ smtp_settings.user }}" autocomplete="username" placeholder="seu e-mail de envio">
+          </div>
+          <div class="form-group">
+            <label for="smtp_password">Senha ou credencial SMTP</label>
+            <div class="flex" style="gap:8px;">
+              <input id="smtp_password" type="password" name="smtp_password" class="form-control" autocomplete="new-password" placeholder="{% if smtp_settings.password_is_configured %}Credencial salva — deixe vazio para manter{% else %}Informe a credencial do provedor{% endif %}">
+              <button class="btn btn-outline btn-sm" type="button" onclick="toggleSmtpPassword()">Mostrar</button>
+            </div>
+            {% if smtp_settings.password_is_configured %}<small class="text-muted">Já existe uma credencial configurada. Este campo fica vazio para protegê-la.</small>{% endif %}
+          </div>
+          <div class="form-group">
+            <label for="smtp_from">E-mail remetente</label>
+            <input id="smtp_from" type="text" name="smtp_from" class="form-control" value="{{ smtp_settings.from }}" placeholder="BarberFlow &lt;nao-responda@seudominio.com&gt;">
+          </div>
+          <div class="form-group">
+            <label for="app_base_url">URL pública do sistema</label>
+            <input id="app_base_url" type="url" name="app_base_url" class="form-control" value="{{ smtp_settings.base_url }}" placeholder="https://www.seudominio.com.br">
+            <small class="text-muted">Precisa usar HTTPS; os links de primeiro acesso e recuperação são montados a partir dela.</small>
+          </div>
+        </div>
+        <div class="form-group" style="margin:8px 0 16px;">
+          <label for="smtp_security">Segurança da conexão</label>
+          <select id="smtp_security" name="smtp_security" class="form-control">
+            <option value="starttls" {% if smtp_settings.security == 'starttls' %}selected{% endif %}>STARTTLS (geralmente porta 587)</option>
+            <option value="ssl" {% if smtp_settings.security == 'ssl' %}selected{% endif %}>SSL/TLS implícito (geralmente porta 465)</option>
+            <option value="none" {% if smtp_settings.security == 'none' %}selected{% endif %}>Sem criptografia (somente servidor confiável de rede interna)</option>
+          </select>
+        </div>
+        {% if smtp_settings.password_is_configured %}
+        <div class="form-group" style="margin:0 0 16px;">
+          <label style="display:flex; align-items:center; gap:10px; cursor:pointer;">
+            <input type="checkbox" name="smtp_clear_password" value="1" style="width:auto;">
+            Remover a credencial salva
+          </label>
+        </div>
+        {% endif %}
+        <button type="submit" class="btn btn-dourado">Salvar configuração de e-mail</button>
+      </form>
+
+      <form method="POST" action="/admin/configuracoes/smtp/testar" class="flex mt-4" style="align-items:end; gap:12px; flex-wrap:wrap;">
+        <div class="form-group" style="flex:1; min-width:240px; margin-bottom:0;">
+          <label for="smtp_test_recipient">Enviar e-mail de teste para</label>
+          <input id="smtp_test_recipient" type="email" name="recipient" class="form-control" placeholder="voce@exemplo.com" required>
+        </div>
+        <button type="submit" class="btn btn-outline">Enviar teste</button>
+      </form>
+    </section>
 
     <!-- Temas prontos -->
     <h3 style="color:var(--dourado); margin: 20px 0 12px; font-size:1rem; text-transform:uppercase; letter-spacing:1px;">🎨 Temas prontos (clique para aplicar)</h3>
@@ -34,7 +124,7 @@
       <button class="btn btn-sm" style="background:#2d1b4e; color:#f0a500; border:2px solid #f0a500;" onclick="applyTheme('purple')">Roxo & Âmbar</button>
     </div>
 
-    <form method="POST" action="/admin/configuracoes/salvar" class="card" style="padding:24px;">
+    <form method="POST" action="/admin/configuracoes/salvar" enctype="multipart/form-data" class="card" style="padding:24px;">
       <h3 style="color:var(--dourado); margin-bottom:16px;">Identidade</h3>
       <div class="form-group">
         <label>Nome da barbearia (ex: BARBERSHOP, CORTE & CIA)</label>
@@ -45,10 +135,21 @@
         <input type="text" name="shop_slogan" class="form-control" value="{{ settings.shop_slogan }}">
       </div>
       <div class="form-group">
-        <label>URL do logo (imagem) — deixe vazio para usar texto</label>
-        <input type="url" name="logo_url" class="form-control" value="{{ settings.logo_url }}" placeholder="https://seu-logo.png">
-        <small class="text-muted">Dica: hospede sua logo no Imgur (grátis) e cole o link aqui.</small>
+        <label for="logo_url">Logo por link</label>
+        <input id="logo_url" type="text" name="logo_url" class="form-control" value="{{ settings.logo_url }}" placeholder="https://site.com/seu-logo.png">
+        <small class="text-muted">Cole o endereço público da imagem. Deixe vazio se quiser usar apenas o nome da barbearia.</small>
       </div>
+      <div class="form-group">
+        <label for="logo_file">Ou escolha uma imagem do computador</label>
+        <input id="logo_file" type="file" name="logo_file" class="form-control" accept="image/png,image/jpeg,image/webp">
+        <small class="text-muted">PNG, JPG ou WebP, até 3 MB. Se selecionar um arquivo, ele será usado no lugar do link.</small>
+      </div>
+      {% if settings.logo_url %}
+      <div class="form-group">
+        <label>Logo atual</label>
+        <div><img src="{{ settings.logo_url }}" alt="Logo atual da barbearia" style="max-width:220px; max-height:100px; object-fit:contain; background:#fff; border-radius:6px; padding:8px;"></div>
+      </div>
+      {% endif %}
 
       <h3 style="color:var(--dourado); margin: 24px 0 16px; font-size:1rem; text-transform:uppercase; letter-spacing:1px;">Cores</h3>
       <div class="grid grid-3" style="gap:16px;">
@@ -131,6 +232,13 @@
 {% endblock %}
 {% block scripts %}
 <script>
+function toggleSmtpPassword() {
+  const input = document.getElementById('smtp_password');
+  const button = input.nextElementSibling;
+  const showing = input.type === 'password';
+  input.type = showing ? 'text' : 'password';
+  button.textContent = showing ? 'Ocultar' : 'Mostrar';
+}
 const themes = {
   classic: {primary:'#c9a227', primary_light:'#e8c547', bg:'#0f0f0f', card:'#1a1a1a', text:'#f5f5f5'},
   blue:    {primary:'#1e3a8a', primary_light:'#3b82f6', bg:'#ffffff', card:'#f3f4f6', text:'#111827'},
