@@ -151,6 +151,12 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/login")
 
+    def test_api_documentation_and_openapi_schema_are_not_public(self):
+        for path in ("/docs", "/redoc", "/openapi.json"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 404)
+
     def test_unauthenticated_user_cannot_open_customer_management(self):
         response = self.client.get("/admin/clientes")
         self.assertEqual(response.status_code, 303)
