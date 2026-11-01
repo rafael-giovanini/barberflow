@@ -13,9 +13,12 @@ DB_PATH = os.getenv(
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    # Aguarda brevemente por outra transação antes de falhar com "database is locked".
+    # O timeout do driver e o PRAGMA mantêm o comportamento explícito por conexão.
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 10000")
     return conn
 
 
