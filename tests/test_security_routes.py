@@ -139,6 +139,60 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(after["role"], before["role"])
         self.assertEqual(after["password_hash"], before["password_hash"])
 
+    def test_admin_customer_edit_rejects_staff_user_id_tampering(self):
+        self._login("admin@example.test")
+        db = self.app_module.get_db()
+        staff = db.execute(
+            "SELECT id, name, email, role FROM users WHERE email=?",
+            ("barber@example.test",),
+        ).fetchone()
+        db.close()
+
+        response = self.client.post("/admin/clientes/salvar", data={
+            "customer_id": staff["id"],
+            "name": "Nome Alterado Indevidamente",
+            "email": "barber-comprometido@example.test",
+            "phone": "18999990000",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("erro=nao_encontrado", response.headers["location"])
+
+        db = self.app_module.get_db()
+        after = db.execute(
+            "SELECT name, email, role FROM users WHERE id=?",
+            (staff["id"],),
+        ).fetchone()
+        db.close()
+        self.assertEqual(after["name"], staff["name"])
+        self.assertEqual(after["email"], staff["email"])
+        self.assertEqual(after["role"], "barber")
+
+    def test_admin_customer_status_rejects_admin_and_barber_ids(self):
+        self._login("admin@example.test")
+        db = self.app_module.get_db()
+        staff = db.execute(
+            "SELECT id, email, active FROM users WHERE role IN ('admin', 'barber') ORDER BY role",
+        ).fetchall()
+        db.close()
+
+        for account in staff:
+            with self.subTest(email=account["email"]):
+                response = self.client.post("/admin/clientes/status", data={
+                    "customer_id": account["id"],
+                    "active": 0,
+                })
+                self.assertEqual(response.status_code, 303)
+                self.assertIn("erro=nao_encontrado", response.headers["location"])
+
+        db = self.app_module.get_db()
+        after = db.execute(
+            "SELECT email, active, role FROM users WHERE role IN ('admin', 'barber') ORDER BY role",
+        ).fetchall()
+        db.close()
+        self.assertEqual(len(after), len(staff))
+        self.assertTrue(all(row["active"] == 1 for row in after))
+        self.assertEqual({row["role"] for row in after}, {"admin", "barber"})
+
     def test_customer_cannot_open_admin_customer_management(self):
         self._login("cliente@example.test")
         response = self.client.get("/admin/clientes")
