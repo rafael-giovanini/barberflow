@@ -2008,7 +2008,7 @@ class SecurityRouteTests(unittest.TestCase):
             smtp = smtp_factory.return_value.__enter__.return_value
             smtp.send_message.assert_called_once()
             message = smtp.send_message.call_args.args[0]
-            token_match = re.search(r"/criar-senha\?token=([^\s]+)", message.get_content())
+            plain_part = message.get_body(preferencelist=("plain",))\n            self.assertIsNotNone(plain_part)\n            token_match = re.search(r"/criar-senha\?token=([^\\s]+)", plain_part.get_content())
             self.assertIsNotNone(token_match)
             token = token_match.group(1)
 
