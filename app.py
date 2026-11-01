@@ -26,7 +26,9 @@ from smtp_settings import get_smtp_config, public_smtp_settings, validate_smtp_f
 # Inicializa banco
 init_db()
 
-app = FastAPI(title="Sistema de Barbearia")
+# A aplicação não publica Swagger, ReDoc ou OpenAPI no ambiente público.
+# A API é consumida pelas páginas do próprio sistema; não há necessidade de expor o esquema.
+app = FastAPI(title="Sistema de Barbearia", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 LOGO_UPLOAD_DIR = Path(DB_PATH).resolve().parent / "uploads"
 LOGO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
