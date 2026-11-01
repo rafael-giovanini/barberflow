@@ -205,6 +205,27 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/login")
 
+    def test_cross_origin_state_changing_request_is_rejected(self):
+        response = self.client.post(
+            "/login",
+            data={"email": "cliente@example.test", "password": "SenhaTeste-123"},
+            headers={"Origin": "https://attacker.example"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["detail"],
+            "Origem da requisição não permitida.",
+        )
+
+    def test_same_origin_state_changing_request_is_not_blocked_by_origin_guard(self):
+        response = self.client.post(
+            "/login",
+            data={"email": "cliente@example.test", "password": "SenhaTeste-123"},
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("barbearia_session", response.headers.get("set-cookie", ""))
+
     def test_api_documentation_and_openapi_schema_are_not_public(self):
         for path in ("/docs", "/redoc", "/openapi.json"):
             with self.subTest(path=path):
