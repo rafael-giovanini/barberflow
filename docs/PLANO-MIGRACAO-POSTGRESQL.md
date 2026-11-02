@@ -15,6 +15,20 @@ A inspeção do código identificou dependências SQLite que impedem uma simples
 - `smtp_settings.py`: UPSERT com `ON CONFLICT`, que pode ser mantido com sintaxe PostgreSQL após validar os índices/constraints.
 - Testes atuais verificam especificamente comportamento SQLite (PRAGMA e migrações SQLite); devem continuar válidos e receber uma suíte separada para PostgreSQL.
 
+## Inventário ampliado de incompatibilidades (segunda auditoria)
+
+A varredura por trechos de `app.py`, `database.py` e `seed_demo.py` confirmou que a migração atinge fluxos críticos, não apenas a inicialização:
+
+- Agendamento: `BEGIN IMMEDIATE` protege a verificação de conflito e a criação do horário. No PostgreSQL, essa proteção precisa ser redesenhada com transação e bloqueio/constraint apropriados para evitar dupla reserva concorrente.
+- Loja: criação de pedido, baixa de estoque e movimentações dependem de `lastrowid` e transações explícitas.
+- Estoque: cadastro/ajuste de produto registra movimentos e precisa preservar atomicidade.
+- Financeiro: estornos e recebimentos usam `date('now', 'localtime')`, índices únicos parciais e tratamento de conflito.
+- Cadastro/autenticação: há captura direta de `sqlite3.IntegrityError` em fluxos de cadastro e edição.
+- Barbeiros: criação encadeada de usuário e barbeiro recupera IDs com `lastrowid`.
+- Seed: usa `last_insert_rowid()`, `INSERT OR REPLACE` e `INSERT OR IGNORE`; não é portável como está.
+
+Outras consultas comuns usam `?` como placeholder e `COLLATE NOCASE`. A solução deve tratar placeholders de forma consistente e substituir ordenação case-insensitive por expressão/colação compatível, sem alterar a semântica de busca.
+
 ## Estratégia técnica
 
 1. Introduzir uma camada de conexão/compatibilidade com seleção explícita por ambiente: `DATABASE_URL` para PostgreSQL e `DATABASE_PATH` para SQLite.
@@ -43,6 +57,7 @@ A inspeção do código identificou dependências SQLite que impedem uma simples
 
 - [x] Branch de trabalho criada a partir de `main`.
 - [x] Auditoria inicial dos pontos SQLite concluída.
+- [x] Segunda varredura dos fluxos críticos (agenda, pedidos, estoque, financeiro, autenticação e seed) concluída.
 - [ ] Camada de conexão e schema PostgreSQL implementados.
 - [ ] Seed PostgreSQL implementado.
 - [ ] Testes de integração PostgreSQL aprovados.
