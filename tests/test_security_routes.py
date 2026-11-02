@@ -1102,6 +1102,37 @@ class SecurityRouteTests(unittest.TestCase):
         db.close()
         self.assertIsNone(row)
 
+    def test_product_upload_rejects_malformed_image_content(self):
+        self._login("admin@example.test")
+        response = self.client.post(
+            "/admin/produtos/salvar",
+            data={"name": "Imagem inválida", "price": "10", "stock": "1",
+                  "category": "Teste", "description": "", "image_url": ""},
+            files={"image_file": ("fake.png", b"not-a-real-image", "image/png")},
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("imagem_erro=formato", response.headers["location"])
+        db = self.app_module.get_db()
+        row = db.execute("SELECT id FROM products WHERE name=?", ("Imagem inválida",)).fetchone()
+        db.close()
+        self.assertIsNone(row)
+
+    def test_product_upload_rejects_file_larger_than_limit(self):
+        self._login("admin@example.test")
+        oversized_png = b"\\x89PNG\\r\\n\\x1a\\n" + (b"x" * (3 * 1024 * 1024))
+        response = self.client.post(
+            "/admin/produtos/salvar",
+            data={"name": "Imagem grande", "price": "10", "stock": "1",
+                  "category": "Teste", "description": "", "image_url": ""},
+            files={"image_file": ("large.png", oversized_png, "image/png")},
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("imagem_erro=tamanho", response.headers["location"])
+        db = self.app_module.get_db()
+        row = db.execute("SELECT id FROM products WHERE name=?", ("Imagem grande",)).fetchone()
+        db.close()
+        self.assertIsNone(row)
+
     def test_product_rejects_non_http_image_url(self):
         self._login("admin@example.test")
         response = self.client.post("/admin/produtos/salvar", data={
