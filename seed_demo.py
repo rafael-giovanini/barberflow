@@ -164,7 +164,7 @@ def main():
 
         # Compras e vendas distribuídas pelos últimos seis meses.
         order_count = 0
-        for month_offset in range(-5, 1):
+        for month_offset in range(-6, 0):
             for batch in range(4):
                 day = 4 + batch * 6
                 occurred = month_date(month_offset, day)
