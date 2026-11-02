@@ -139,6 +139,60 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(after["role"], before["role"])
         self.assertEqual(after["password_hash"], before["password_hash"])
 
+    def test_admin_customer_edit_rejects_staff_user_id_tampering(self):
+        self._login("admin@example.test")
+        db = self.app_module.get_db()
+        staff = db.execute(
+            "SELECT id, name, email, role FROM users WHERE email=?",
+            ("barber@example.test",),
+        ).fetchone()
+        db.close()
+
+        response = self.client.post("/admin/clientes/salvar", data={
+            "customer_id": staff["id"],
+            "name": "Nome Alterado Indevidamente",
+            "email": "barber-comprometido@example.test",
+            "phone": "18999990000",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("erro=nao_encontrado", response.headers["location"])
+
+        db = self.app_module.get_db()
+        after = db.execute(
+            "SELECT name, email, role FROM users WHERE id=?",
+            (staff["id"],),
+        ).fetchone()
+        db.close()
+        self.assertEqual(after["name"], staff["name"])
+        self.assertEqual(after["email"], staff["email"])
+        self.assertEqual(after["role"], "barber")
+
+    def test_admin_customer_status_rejects_admin_and_barber_ids(self):
+        self._login("admin@example.test")
+        db = self.app_module.get_db()
+        staff = db.execute(
+            "SELECT id, email, active FROM users WHERE role IN ('admin', 'barber') ORDER BY role",
+        ).fetchall()
+        db.close()
+
+        for account in staff:
+            with self.subTest(email=account["email"]):
+                response = self.client.post("/admin/clientes/status", data={
+                    "customer_id": account["id"],
+                    "active": 0,
+                })
+                self.assertEqual(response.status_code, 303)
+                self.assertIn("erro=nao_encontrado", response.headers["location"])
+
+        db = self.app_module.get_db()
+        after = db.execute(
+            "SELECT email, active, role FROM users WHERE role IN ('admin', 'barber') ORDER BY role",
+        ).fetchall()
+        db.close()
+        self.assertEqual(len(after), len(staff))
+        self.assertTrue(all(row["active"] == 1 for row in after))
+        self.assertEqual({row["role"] for row in after}, {"admin", "barber"})
+
     def test_customer_cannot_open_admin_customer_management(self):
         self._login("cliente@example.test")
         response = self.client.get("/admin/clientes")
@@ -150,6 +204,33 @@ class SecurityRouteTests(unittest.TestCase):
         response = self.client.get("/admin/clientes")
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/login")
+
+    def test_cross_origin_state_changing_request_is_rejected(self):
+        response = self.client.post(
+            "/login",
+            data={"email": "cliente@example.test", "password": "SenhaTeste-123"},
+            headers={"Origin": "https://attacker.example"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["detail"],
+            "Origem da requisição não permitida.",
+        )
+
+    def test_same_origin_state_changing_request_is_not_blocked_by_origin_guard(self):
+        response = self.client.post(
+            "/login",
+            data={"email": "cliente@example.test", "password": "SenhaTeste-123"},
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("barbearia_session", response.headers.get("set-cookie", ""))
+
+    def test_api_documentation_and_openapi_schema_are_not_public(self):
+        for path in ("/docs", "/redoc", "/openapi.json"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 404)
 
     def test_unauthenticated_user_cannot_open_customer_management(self):
         response = self.client.get("/admin/clientes")
@@ -1018,6 +1099,37 @@ class SecurityRouteTests(unittest.TestCase):
         row = db.execute(
             "SELECT id FROM products WHERE name=?", ("Produto estoque inválido",)
         ).fetchone()
+        db.close()
+        self.assertIsNone(row)
+
+    def test_product_upload_rejects_malformed_image_content(self):
+        self._login("admin@example.test")
+        response = self.client.post(
+            "/admin/produtos/salvar",
+            data={"name": "Imagem inválida", "price": "10", "stock": "1",
+                  "category": "Teste", "description": "", "image_url": ""},
+            files={"image_file": ("fake.png", b"not-a-real-image", "image/png")},
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("imagem_erro=formato", response.headers["location"])
+        db = self.app_module.get_db()
+        row = db.execute("SELECT id FROM products WHERE name=?", ("Imagem inválida",)).fetchone()
+        db.close()
+        self.assertIsNone(row)
+
+    def test_product_upload_rejects_file_larger_than_limit(self):
+        self._login("admin@example.test")
+        oversized_png = b"\\x89PNG\\r\\n\\x1a\\n" + (b"x" * (3 * 1024 * 1024))
+        response = self.client.post(
+            "/admin/produtos/salvar",
+            data={"name": "Imagem grande", "price": "10", "stock": "1",
+                  "category": "Teste", "description": "", "image_url": ""},
+            files={"image_file": ("large.png", oversized_png, "image/png")},
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("imagem_erro=tamanho", response.headers["location"])
+        db = self.app_module.get_db()
+        row = db.execute("SELECT id FROM products WHERE name=?", ("Imagem grande",)).fetchone()
         db.close()
         self.assertIsNone(row)
 
@@ -2002,7 +2114,9 @@ class SecurityRouteTests(unittest.TestCase):
             smtp = smtp_factory.return_value.__enter__.return_value
             smtp.send_message.assert_called_once()
             message = smtp.send_message.call_args.args[0]
-            token_match = re.search(r"/criar-senha\?token=([^\s]+)", message.get_content())
+            plain_part = message.get_body(preferencelist=("plain",))
+            self.assertIsNotNone(plain_part)
+            token_match = re.search(r"/criar-senha\?token=([^\s]+)", plain_part.get_content())
             self.assertIsNotNone(token_match)
             token = token_match.group(1)
 

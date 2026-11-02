@@ -48,6 +48,15 @@ class DatabaseMigrationTests(unittest.TestCase):
                 os.environ[key] = value
         self.temp_dir.cleanup()
 
+    def test_database_connection_enables_foreign_keys_and_busy_timeout(self):
+        conn = database.get_db()
+        foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+        busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        conn.close()
+
+        self.assertEqual(foreign_keys, 1)
+        self.assertEqual(busy_timeout, 10000)
+
     def test_migration_preserves_users_and_adds_security_fields(self):
         database.init_db()
         conn = sqlite3.connect(database.DB_PATH)

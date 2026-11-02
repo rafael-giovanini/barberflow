@@ -26,7 +26,9 @@ from smtp_settings import get_smtp_config, public_smtp_settings, validate_smtp_f
 # Inicializa banco
 init_db()
 
-app = FastAPI(title="Sistema de Barbearia")
+# A aplicação não publica Swagger, ReDoc ou OpenAPI no ambiente público.
+# A API é consumida pelas páginas do próprio sistema; não há necessidade de expor o esquema.
+app = FastAPI(title="Sistema de Barbearia", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 LOGO_UPLOAD_DIR = Path(DB_PATH).resolve().parent / "uploads"
 LOGO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -1812,6 +1814,11 @@ def admin_pedidos_status(request: Request, order_id: int = Form(...), status: st
         return RedirectResponse(url="/admin/pedidos?erro=status", status_code=303)
     db = get_db()
     try:
+        # Serializa mudanças de status do mesmo pedido. Sem o bloqueio imediato,
+        # duas requisições simultâneas de cancelamento poderiam verificar a
+        # ausência de devolução antes de qualquer uma gravá-la e devolver estoque
+        # em duplicidade.
+        db.execute("BEGIN IMMEDIATE")
         order = db.execute("SELECT id, total, payment_method, status FROM orders WHERE id=?", (order_id,)).fetchone()
         if not order:
             return RedirectResponse(url="/admin/pedidos?erro=pedido", status_code=303)
