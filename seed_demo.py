@@ -37,7 +37,7 @@ def month_date(month_offset: int, day: int) -> date:
 def parse_args():
     parser = argparse.ArgumentParser(description="Preenche uma base isolada de demonstração.")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB, help="Arquivo SQLite exclusivo da demonstração.")
-    parser.add_argument("--admin-email", default="demo.admin@barberflow.local")
+    parser.add_argument("--admin-email", default="admin@barberflow.teste")
     parser.add_argument("--reset", action="store_true", help="Apaga somente o arquivo de demonstração indicado antes de recriá-lo.")
     return parser.parse_args()
 
@@ -71,7 +71,10 @@ def main():
             Path(str(demo_db) + suffix).unlink(missing_ok=True)
 
     demo_db.parent.mkdir(parents=True, exist_ok=True)
-    admin_password = secrets.token_urlsafe(18) + "A9!"
+    supplied_password = os.getenv("DEMO_ADMIN_PASSWORD", "")
+    if supplied_password and len(supplied_password) < 10:
+        raise SystemExit("ERRO: DEMO_ADMIN_PASSWORD deve ter pelo menos 10 caracteres.")
+    admin_password = supplied_password or (secrets.token_urlsafe(18) + "A9!")
     os.environ["DATABASE_PATH"] = str(demo_db)
     os.environ["INITIAL_ADMIN_EMAIL"] = args.admin_email.strip().lower()
     os.environ["INITIAL_ADMIN_PASSWORD"] = admin_password
@@ -301,7 +304,10 @@ def main():
     print("\nBASE DE DEMONSTRAÇÃO CRIADA")
     print(f"Banco: {demo_db}")
     print(f"Administrador: {args.admin_email.strip().lower()}")
-    print(f"Senha inicial (guarde agora): {admin_password}")
+    if supplied_password:
+        print("Senha administrativa definida por DEMO_ADMIN_PASSWORD (não exibida por segurança).")
+    else:
+        print(f"Senha inicial (guarde agora): {admin_password}")
     print("A conta é exclusiva desta base. Altere a senha após o primeiro acesso.")
     print("Resumo: " + ", ".join(f"{key}={value}" for key, value in summary.items()))
     print("Para iniciar a aplicação com esta base, defina DATABASE_PATH para o caminho acima antes de iniciar o servidor.")
