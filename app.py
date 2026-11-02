@@ -1814,6 +1814,11 @@ def admin_pedidos_status(request: Request, order_id: int = Form(...), status: st
         return RedirectResponse(url="/admin/pedidos?erro=status", status_code=303)
     db = get_db()
     try:
+        # Serializa mudanças de status do mesmo pedido. Sem o bloqueio imediato,
+        # duas requisições simultâneas de cancelamento poderiam verificar a
+        # ausência de devolução antes de qualquer uma gravá-la e devolver estoque
+        # em duplicidade.
+        db.execute("BEGIN IMMEDIATE")
         order = db.execute("SELECT id, total, payment_method, status FROM orders WHERE id=?", (order_id,)).fetchone()
         if not order:
             return RedirectResponse(url="/admin/pedidos?erro=pedido", status_code=303)
