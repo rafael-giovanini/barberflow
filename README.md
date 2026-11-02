@@ -143,3 +143,8 @@ barbearia/
 
 ## 📞 Suporte
 Este sistema foi construído do zero e é totalmente seu. Modifique, venda, use como quiser!
+
+
+## Ambiente de demonstração
+
+Para criar uma base separada com clientes, vendas, financeiro, estoque e agenda fictícios, consulte [`docs/DEMONSTRACAO.md`](docs/DEMONSTRACAO.md). O gerador cria também um administrador exclusivo da demonstração com senha aleatória exibida uma única vez no terminal. A base operacional não é alterada.
