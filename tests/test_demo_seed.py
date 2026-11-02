@@ -24,7 +24,7 @@ class DemoSeedTests(unittest.TestCase):
             env["DATABASE_PATH"] = str(operational_db)
 
             first = subprocess.run(
-                [sys.executable, str(SEED_SCRIPT), "--db", str(demo_db)],
+                [sys.executable, str(SEED_SCRIPT), "--db", str(demo_db), "--admin-email", "demo.admin@barberflow.local"],
                 cwd=ROOT, env=env, text=True, capture_output=True, timeout=120,
             )
             self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
