@@ -29,7 +29,7 @@ Para escolher outro caminho:
 python seed_demo.py --db ./dados/barberflow-demo.demo.db
 ```
 
-A conta padrão é `demo.admin@barberflow.local`. Ela só existe no banco de demonstração. Os demais usuários fictícios são criados sem senha de acesso (primeiro acesso obrigatório).
+A conta padrão é `admin@barberflow.teste`. Ela só existe no banco de demonstração. Os demais usuários fictícios são criados sem senha de acesso (primeiro acesso obrigatório). Para definir a senha administrativa sem gravá-la no repositório, use a variável `DEMO_ADMIN_PASSWORD` antes de executar o gerador. A senha precisa ter pelo menos 10 caracteres.
 
 ## Iniciar o sistema usando a base demo
 
