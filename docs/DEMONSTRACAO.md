@@ -11,6 +11,7 @@ O script `seed_demo.py`:
 - gera vendas, pedidos pagos/pendentes/cancelados, despesas, atendimentos concluídos e agendamentos futuros;
 - registra movimentações de estoque correspondentes a vendas, devoluções e reposições;
 - distribui o histórico por seis meses fechados;
+- registra pelo menos uma compra de estoque e a respectiva despesa de caixa em cada mês, além das saídas por vendas e devoluções;
 - grava um marcador para impedir duplicação ao executar novamente.
 
 ## Criar a base

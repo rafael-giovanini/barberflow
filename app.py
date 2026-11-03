@@ -20,6 +20,7 @@ from fastapi.templating import Jinja2Templates
 from itsdangerous import URLSafeTimedSerializer
 
 from database import DB_PATH, init_db, get_db, get_settings
+from db_compat import is_postgresql_configured
 from auth import hash_password, verify_password, normalize_cpf, valid_cpf, valid_birth_date
 from smtp_settings import get_smtp_config, public_smtp_settings, validate_smtp_form, save_smtp_settings
 
@@ -601,6 +602,9 @@ async def api_agendar(request: Request):
         if appointment_date == datetime.now().date() and start.time() <= datetime.now().time():
             return JSONResponse({"ok": False, "error": "Não é possível agendar um horário passado."}, status_code=400)
         db.execute("BEGIN IMMEDIATE")
+        if is_postgresql_configured():
+            # Serializa novas reservas do mesmo barbeiro no PostgreSQL.
+            db.execute("SELECT id FROM barbers WHERE id=? FOR UPDATE", (barber_id,))
         conflict = db.execute("""
             SELECT id FROM appointments WHERE barber_id=? AND appointment_date=? AND status='scheduled'
             AND NOT (end_time <= ? OR start_time >= ?)
@@ -742,9 +746,9 @@ async def finalizar_pedido(request: Request, customer_name: str = Form(...),
             total += product["price"] * qty
         cur = db.execute("""
             INSERT INTO orders (user_id, customer_name, customer_phone, address, total, payment_method, status)
-            VALUES (?,?,?,?,?,?, 'pending')
+            VALUES (?,?,?,?,?,?, 'pending') RETURNING id
         """, (user["user_id"] if user else None, customer_name, customer_phone, address, total, payment_method))
-        order_id = cur.lastrowid
+        order_id = cur.fetchone()["id"]
         for product, qty in verified_items:
             changed = db.execute("UPDATE products SET stock=stock-? WHERE id=? AND stock>=? AND active=1",
                                  (qty, product["id"], qty))
@@ -1642,6 +1646,8 @@ async def admin_produto_salvar(request: Request, name: str = Form(...), descript
     try:
         db.execute("BEGIN IMMEDIATE")
         if product_id:
+            if is_postgresql_configured():
+                db.execute("SELECT id FROM products WHERE id=? FOR UPDATE", (product_id,))
             current = db.execute("SELECT stock, image_url FROM products WHERE id=?", (product_id,)).fetchone()
             if not current:
                 db.rollback()
@@ -1659,13 +1665,13 @@ async def admin_produto_salvar(request: Request, name: str = Form(...), descript
                     VALUES (?, 'adjustment', ?, ?, ?, ?)""",
                     (product_id, changed_qty, int(round(cost_price * 100)), "Ajuste de saldo pelo cadastro do produto", user["user_id"]))
         else:
-            cur = db.execute("INSERT INTO products (name, description, price, cost_price, stock, category, image_url) VALUES (?,?,?,?,?,?,?)",
+            cur = db.execute("INSERT INTO products (name, description, price, cost_price, stock, category, image_url) VALUES (?,?,?,?,?,?,?) RETURNING id",
                 (name, description, price, cost_price, stock, category, image_url))
             if stock:
                 db.execute("""INSERT INTO stock_movements
                     (product_id, movement_type, quantity, unit_cost_cents, note, created_by)
                     VALUES (?, 'opening', ?, ?, 'Saldo inicial do cadastro', ?)""",
-                    (cur.lastrowid, stock, int(round(cost_price * 100)), user["user_id"]))
+                    (cur.fetchone()["id"], stock, int(round(cost_price * 100)), user["user_id"]))
         db.commit()
     except Exception:
         db.rollback()
@@ -1691,6 +1697,8 @@ def admin_estoque_entrada(request: Request, product_id: int = Form(...),
     db = get_db()
     try:
         db.execute("BEGIN IMMEDIATE")
+        if is_postgresql_configured():
+            db.execute("SELECT id FROM products WHERE id=? FOR UPDATE", (product_id,))
         product = db.execute("SELECT id, stock, cost_price FROM products WHERE id=? AND active=1", (product_id,)).fetchone()
         if not product:
             db.rollback()
@@ -1819,6 +1827,9 @@ def admin_pedidos_status(request: Request, order_id: int = Form(...), status: st
         # ausência de devolução antes de qualquer uma gravá-la e devolver estoque
         # em duplicidade.
         db.execute("BEGIN IMMEDIATE")
+        if is_postgresql_configured():
+            # Evita que duas requisições devolvam o mesmo pedido ao estoque.
+            db.execute("SELECT id FROM orders WHERE id=? FOR UPDATE", (order_id,))
         order = db.execute("SELECT id, total, payment_method, status FROM orders WHERE id=?", (order_id,)).fetchone()
         if not order:
             return RedirectResponse(url="/admin/pedidos?erro=pedido", status_code=303)
@@ -2097,20 +2108,20 @@ async def admin_barbeiro_salvar(request: Request):
                 db.execute("UPDATE users SET email=?, password_hash=?, name=?, session_version=session_version+1 WHERE id=?",
                            (email, hash_password(password), name, existing["user_id"]))
             else:
-                cur = db.execute("INSERT INTO users (name, email, password_hash, role) VALUES (?,?,?,?)",
+                cur = db.execute("INSERT INTO users (name, email, password_hash, role) VALUES (?,?,?,?) RETURNING id",
                                  (name, email, hash_password(password), "barber"))
-                db.execute("UPDATE barbers SET user_id=? WHERE id=?", (cur.lastrowid, barber_id))
+                db.execute("UPDATE barbers SET user_id=? WHERE id=?", (cur.fetchone()["id"], barber_id))
     else:
         cur = db.execute("""INSERT INTO barbers (name, bio, photo_url, work_start, work_end,
-                          lunch_start, lunch_end, work_days, active) VALUES (?,?,?,?,?,?,?,?,1)""",
+                          lunch_start, lunch_end, work_days, active) VALUES (?,?,?,?,?,?,?,?,1) RETURNING id""",
                         (name, form.get("bio",""), form.get("photo_url",""),
                          form.get("work_start","09:00"), form.get("work_end","18:00"),
                          form.get("lunch_start","12:00"), form.get("lunch_end","13:00"), work_days))
-        bid = cur.lastrowid
+        bid = cur.fetchone()["id"]
         if email and password:
-            uc = db.execute("INSERT INTO users (name, email, password_hash, role) VALUES (?,?,?,?)",
+            uc = db.execute("INSERT INTO users (name, email, password_hash, role) VALUES (?,?,?,?) RETURNING id",
                             (name, email, hash_password(password), "barber"))
-            db.execute("UPDATE barbers SET user_id=? WHERE id=?", (uc.lastrowid, bid))
+            db.execute("UPDATE barbers SET user_id=? WHERE id=?", (uc.fetchone()["id"], bid))
     db.commit()
     db.close()
     return RedirectResponse(url="/admin/barbeiros?salvo=1", status_code=303)

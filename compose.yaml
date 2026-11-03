@@ -6,6 +6,7 @@ services:
       - "${PORT:-8000}:8000"
     environment:
       DATABASE_PATH: /data/barbearia.db
+      DATABASE_URL: ${DATABASE_URL:-}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       SECRET_KEY: ${SECRET_KEY:-}
       COOKIE_SECURE: ${COOKIE_SECURE:-0}

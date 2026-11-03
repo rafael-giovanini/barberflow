@@ -75,6 +75,21 @@ class DemoSeedTests(unittest.TestCase):
                 FROM financial_transactions
             """).fetchone()[0]
             self.assertEqual(months, 6)
+            purchase_months = conn.execute("""
+                SELECT COUNT(DISTINCT substr(created_at,1,7))
+                FROM stock_movements WHERE movement_type='purchase'
+            """).fetchone()[0]
+            self.assertEqual(purchase_months, 6)
+            stock_purchase_expenses = conn.execute("""
+                SELECT COUNT(*) FROM financial_transactions
+                WHERE transaction_type='expense' AND category='Estoque' AND status='paid'
+            """).fetchone()[0]
+            self.assertEqual(stock_purchase_expenses, 6)
+            exits = conn.execute("""
+                SELECT COUNT(*) FROM stock_movements
+                WHERE movement_type='sale' AND quantity < 0
+            """).fetchone()[0]
+            self.assertGreater(exits, 0)
             conn.close()
 
             second = subprocess.run(

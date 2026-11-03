@@ -37,6 +37,55 @@ Ou:
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
+### Usar PostgreSQL
+
+O backend é selecionado pela variável `DATABASE_URL`:
+
+- sem `DATABASE_URL`, o sistema continua usando SQLite local;
+- com `DATABASE_URL`, o schema PostgreSQL é criado automaticamente na primeira
+  inicialização e os dados de exemplo são inseridos somente se a tabela de
+  serviços estiver vazia.
+
+Exemplo de execução local:
+
+```powershell
+$env:DATABASE_URL="postgresql://usuario:senha@host:5432/barberflow"
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
+
+Para Neon/Render, configure `DATABASE_URL` como variável secreta do serviço.
+Use uma base exclusiva para cada ambiente; não aponte o seed de demonstração
+para uma base operacional.
+
+#### Copiar dados existentes do SQLite
+
+O importador preserva IDs, relações, histórico, configurações e os contadores de
+IDs; ele **não apaga nem altera o arquivo SQLite**. Faça backup dos dois bancos
+e coloque a aplicação em modo de manutenção antes da cópia para evitar que
+novas gravações ocorram no SQLite durante o processo.
+
+Primeiro rode a auditoria em modo somente leitura:
+
+```powershell
+python migrate_sqlite_to_postgres.py --sqlite "C:\caminho\barbearia.db"
+```
+
+Confira os totais e configure `DATABASE_URL` para uma base PostgreSQL
+**exclusiva e vazia**. A opção `--apply` cria o schema e importa todas as tabelas
+em uma transação; qualquer falha desfaz a importação inteira. O script recusa
+destinos que já tenham registros:
+
+```powershell
+$env:DATABASE_URL="postgresql://usuario:senha@host:5432/barberflow"
+python migrate_sqlite_to_postgres.py --sqlite "C:\caminho\barbearia.db" --apply
+```
+
+Depois compare os totais, valide o acesso ao sistema e só então reaponte o
+serviço para o PostgreSQL. Imagens e outros arquivos da pasta `uploads/` não
+estão dentro do banco: copie-os para o armazenamento persistente configurado no
+ambiente de destino. Mantenha o SQLite e o backup até concluir a validação e
+definir um plano de rollback.
+
 ### Rodar com Docker Compose
 
 É necessário ter Docker Engine e o plugin Docker Compose instalados. Na primeira execução, crie um arquivo `.env` na raiz do projeto com as credenciais do administrador inicial e uma chave de sessão persistente:
@@ -45,6 +94,8 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 INITIAL_ADMIN_EMAIL=admin@exemplo.com
 INITIAL_ADMIN_PASSWORD=defina-uma-senha-forte-com-10-ou-mais-caracteres
 SECRET_KEY=cole-aqui-um-segredo-aleatorio
+# Opcional: quando preenchido, substitui o SQLite pelo PostgreSQL.
+DATABASE_URL=postgresql://usuario:senha@host:5432/barberflow
 ```
 
 Gere o segredo com `python -c "import secrets; print(secrets.token_urlsafe(48))"`. O arquivo `.env` não é incluído na imagem nem versionado.
@@ -55,7 +106,7 @@ Inicie o sistema:
 docker compose up --build -d
 ```
 
-Acesse http://localhost:8000. O banco SQLite fica no volume persistente `barberflow_data`, então os dados permanecem após recriar o contêiner. Para acompanhar os logs use `docker compose logs -f`; para parar use `docker compose down`. O comando `docker compose down -v` também apaga o volume e todos os dados do banco.
+Acesse http://localhost:8000. Sem `DATABASE_URL`, o banco SQLite fica no volume persistente `barberflow_data`, então os dados permanecem após recriar o contêiner. Com `DATABASE_URL`, os dados ficam no PostgreSQL configurado e o volume continua sendo usado para uploads. Para acompanhar os logs use `docker compose logs -f`; para parar use `docker compose down`. O comando `docker compose down -v` apaga o volume local e os uploads, mas não remove dados do PostgreSQL externo.
 
 Para uso público, configure `ENVIRONMENT=production`, uma `SECRET_KEY` persistente e `COOKIE_SECURE=1` no `.env`, e publique atrás de um proxy HTTPS. O SMTP e a URL pública HTTPS podem ser configurados em `/admin/configuracoes`; também podem ser definidos no ambiente do Docker. O logo, as imagens de produtos e as fotos do portfólio podem ser informados por URL ou enviados como arquivo PNG, JPG ou WebP (até 3 MB por imagem); os arquivos enviados ficam no volume persistente junto ao banco. Não exponha diretamente o contêiner à internet sem HTTPS.
 
