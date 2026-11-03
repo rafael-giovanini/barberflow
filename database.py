@@ -4,6 +4,7 @@ Um único arquivo, sem necessidade de instalar servidor de banco.
 """
 import sqlite3
 import os
+from db_compat import is_postgresql_configured, postgres_connection_class, psycopg_row_factory
 from datetime import datetime
 
 DB_PATH = os.getenv(
@@ -13,6 +14,14 @@ DB_PATH = os.getenv(
 
 
 def get_db():
+    if is_postgresql_configured():
+        connection_class = postgres_connection_class()
+        return connection_class.connect(
+            os.environ["DATABASE_URL"].strip(),
+            connect_timeout=10,
+            row_factory=psycopg_row_factory,
+        )
+
     # Aguarda brevemente por outra transação antes de falhar com "database is locked".
     # O timeout do driver e o PRAGMA mantêm o comportamento explícito por conexão.
     conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -22,7 +31,44 @@ def get_db():
     return conn
 
 
+def _init_postgresql_db():
+    from database_postgres import initialize_postgresql_schema
+
+    conn = get_db()
+    try:
+        initialize_postgresql_schema(conn)
+        conn.commit()
+        seed_settings(conn)
+
+        if conn.execute("SELECT COUNT(*) FROM services").fetchone()[0] == 0:
+            seed_data(conn)
+
+        admin_email = os.getenv("INITIAL_ADMIN_EMAIL", "").strip().lower()
+        admin_password = os.getenv("INITIAL_ADMIN_PASSWORD", "")
+        if admin_email and admin_password:
+            existing_admin = conn.execute(
+                "SELECT id FROM users WHERE role='admin' LIMIT 1"
+            ).fetchone()
+            if not existing_admin:
+                from auth import hash_password
+                admin = conn.execute(
+                    "INSERT INTO users (name, email, phone, password_hash, role) "
+                    "VALUES (?, ?, ?, ?, ?) RETURNING id",
+                    ("Administrador", admin_email, "", hash_password(admin_password), "admin"),
+                ).fetchone()
+                conn.execute(
+                    "INSERT INTO barbers (user_id, name, bio, active) VALUES (?, ?, ?, ?)",
+                    (admin["id"], "Administrador", "", 1),
+                )
+                conn.commit()
+    finally:
+        conn.close()
+
+
 def init_db():
+    if is_postgresql_configured():
+        _init_postgresql_db()
+        return
     conn = get_db()
     c = conn.cursor()
 
@@ -348,10 +394,10 @@ def init_db():
         if not existing_admin:
             admin_hash = hash_password(admin_password)
             c.execute(
-                "INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)",
+                "INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?) RETURNING id",
                 ("Administrador", admin_email, "", admin_hash, "admin")
             )
-            admin_id = c.lastrowid
+            admin_id = c.fetchone()["id"]
             c.execute(
                 "INSERT INTO barbers (user_id, name, bio, active) VALUES (?,?,?,?)",
                 (admin_id, "Administrador", "", 1)
@@ -383,7 +429,7 @@ def seed_settings(conn):
     """Insere configurações padrão caso não existam."""
     c = conn.cursor()
     for key, value in DEFAULT_SETTINGS.items():
-        c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
+        c.execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING", (key, value))
     conn.commit()
 
 

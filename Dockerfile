@@ -14,7 +14,7 @@ RUN groupadd --system barberflow \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py auth.py database.py security_routes.py smtp_settings.py ./
+COPY app.py auth.py database.py database_postgres.py db_compat.py security_routes.py smtp_settings.py seed_demo.py ./
 COPY static ./static
 COPY templates ./templates
 

@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-Manter SQLite como backend padrão para desenvolvimento local e testes existentes, adicionando PostgreSQL via `DATABASE_URL` para a implantação demonstrativa no Render/Neon. A migração não deve copiar dados operacionais nem executar alterações destrutivas no banco existente.
+Manter SQLite como backend padrão para desenvolvimento local e testes existentes, adicionando PostgreSQL via `DATABASE_URL` para implantação no Render/Neon. Quando solicitado, permitir uma cópia única dos dados SQLite para uma base PostgreSQL exclusiva e vazia. A origem SQLite nunca é alterada ou apagada.
 
 ## Auditoria inicial do branch main
 
@@ -38,7 +38,8 @@ Outras consultas comuns usam `?` como placeholder e `COLLATE NOCASE`. A soluçã
 5. Remover construções SQLite específicas das operações compartilhadas, incluindo `BEGIN IMMEDIATE`, `last_insert_rowid()`, `INSERT OR REPLACE/IGNORE` e funções de data SQLite.
 6. Normalizar exceções de integridade para que a aplicação não dependa de `sqlite3.IntegrityError` quando o backend for PostgreSQL.
 7. Adaptar o seed demonstrativo para criar dados fictícios diretamente no banco selecionado, com proteção contra execução acidental em banco operacional e idempotência.
-8. Executar testes unitários SQLite existentes e testes de integração PostgreSQL antes de configurar Render.
+8. Disponibilizar um importador SQLite → PostgreSQL em modo de auditoria por padrão, com transação atômica, validação de integridade/relacionamentos, preservação de IDs e sequências e recusa a destinos com dados.
+9. Executar testes unitários SQLite existentes e testes de integração PostgreSQL antes de configurar Render.
 
 ## Segurança e implantação
 
@@ -58,8 +59,22 @@ Outras consultas comuns usam `?` como placeholder e `COLLATE NOCASE`. A soluçã
 - [x] Branch de trabalho criada a partir de `main`.
 - [x] Auditoria inicial dos pontos SQLite concluída.
 - [x] Segunda varredura dos fluxos críticos (agenda, pedidos, estoque, financeiro, autenticação e seed) concluída.
-- [ ] Camada de conexão e schema PostgreSQL implementados.
-- [ ] Seed PostgreSQL implementado.
-- [ ] Testes de integração PostgreSQL aprovados.
+- [x] Primeira etapa da camada de conexão Psycopg 3, schema PostgreSQL e tradução compatível de SQL implementada.
+- [x] Seed demonstrativo habilitado para PostgreSQL com proteção contra bancos não vazios, idempotência e sem opção de reset para PostgreSQL.
+- [x] Testes smoke de integração aprovados em PostgreSQL 16 local temporário (schema, seed, parâmetros, linhas híbridas, transação e erro de integridade).
+- [x] Importador SQLite → PostgreSQL implementado com auditoria somente leitura, destino vazio, transação atômica, preservação de relacionamentos/IDs e validação por testes em fixture isolada.
+- [x] Concorrência de agendamento por barbeiro e checkout disputando a última unidade validada em PostgreSQL.
+- [ ] Compatibilidade de todas as rotas e cenários de concorrência verificada em PostgreSQL.
+- [ ] Suíte SQLite completa repetida após as alterações.
+- [ ] Execução real do workflow CI confirmada no GitHub.
 - [ ] Revisão e PR para `main`.
 - [ ] Configuração de variáveis no Render e validação do deploy.
+
+
+## Implementação incremental em andamento
+
+A primeira etapa adiciona `psycopg[binary]` 3.3.6, seleção de backend por `DATABASE_URL`, schema PostgreSQL próprio e um adaptador lexical que converte placeholders `?` sem alterar interrogações dentro de strings/comentários. As linhas PostgreSQL permitem acesso por nome e índice, e violações de integridade são normalizadas para preservar os `except sqlite3.IntegrityError` existentes.
+
+Os inserts que precisam de ID usam `RETURNING id`. O agendamento bloqueia a linha do barbeiro no PostgreSQL antes de verificar conflitos; compras/ajustes de estoque bloqueiam a linha do produto e vendas mantêm baixa condicional de estoque. O seed de demonstração aceita `--database-url` somente para banco com nome contendo `demo`, exige banco vazio ou previamente marcado e rejeita `--reset` em PostgreSQL.
+
+A validação feita até aqui ocorreu em um contêiner PostgreSQL 16 local. Os testes do importador usam um SQLite temporário com dados ligados por chaves estrangeiras; verificam contagens, valores, sequências e a recusa de um segundo import sobre destino preenchido. Nenhuma conexão foi feita ao Neon ou Render. Para efetivar a cópia do ambiente real, ainda são necessários o caminho de um SQLite válido e uma `DATABASE_URL` de destino exclusiva e vazia.

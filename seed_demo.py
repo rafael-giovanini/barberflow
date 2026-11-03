@@ -36,7 +36,16 @@ def month_date(month_offset: int, day: int) -> date:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Preenche uma base isolada de demonstração.")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB, help="Arquivo SQLite exclusivo da demonstração.")
+    destination = parser.add_mutually_exclusive_group()
+    destination.add_argument("--db", type=Path, help="Arquivo SQLite exclusivo da demonstração.")
+    destination.add_argument(
+        "--database-url",
+        default=os.getenv("BARBERFLOW_DEMO_DATABASE_URL", "").strip(),
+        help=(
+            "URL de um banco PostgreSQL dedicado à demonstração (nome deve "
+            "conter demo); também pode vir de BARBERFLOW_DEMO_DATABASE_URL."
+        ),
+    )
     parser.add_argument("--admin-email", default="admin@barberflow.teste")
     parser.add_argument("--reset", action="store_true", help="Apaga somente o arquivo de demonstração indicado antes de recriá-lo.")
     return parser.parse_args()
@@ -44,19 +53,45 @@ def parse_args():
 
 def main():
     args = parse_args()
-    demo_db = args.db.expanduser().resolve()
-    configured_db = Path(os.getenv("DATABASE_PATH", ROOT / "barbearia.db")).expanduser().resolve()
-
-    if demo_db == configured_db:
-        raise SystemExit("ERRO: o caminho informado é o banco operacional configurado.")
-    if demo_db == ROOT / "barbearia.db":
-        raise SystemExit("ERRO: o banco operacional não pode ser usado como demonstração.")
-    if demo_db.suffixes[-2:] != [".demo", ".db"]:
-        raise SystemExit("ERRO: use um nome terminado em .demo.db para identificar a base isolada.")
+    demo_db = args.db.expanduser().resolve() if args.db else DEFAULT_DB
+    postgres_demo = bool(args.database_url)
+    if postgres_demo:
+        from urllib.parse import urlparse
+        parsed_url = urlparse(args.database_url)
+        database_name = parsed_url.path.rstrip("/").split("/")[-1].lower()
+        if "demo" not in database_name:
+            raise SystemExit("ERRO: o nome do banco PostgreSQL dedicado deve conter 'demo'.")
+        if args.reset:
+            raise SystemExit("ERRO: --reset não é permitido para PostgreSQL.")
+        # A inicialização só é autorizada em um banco público vazio ou já marcado
+        # por este script; assim, a carga padrão nunca toca um banco existente.
+        import psycopg
+        from psycopg.rows import dict_row
+        with psycopg.connect(args.database_url, connect_timeout=10, row_factory=dict_row) as probe:
+            settings_table = probe.execute("SELECT to_regclass('public.settings') AS table_name").fetchone()["table_name"]
+            if settings_table:
+                marker = probe.execute("SELECT value FROM settings WHERE key=%s", (MARKER_KEY,)).fetchone()
+                if marker and marker["value"] == MARKER_VERSION:
+                    print("Base de demonstração PostgreSQL já preenchida; nenhuma duplicação realizada.")
+                    return
+                raise SystemExit("ERRO: PostgreSQL informado já contém tabelas sem o marcador da demonstração.")
+            existing_tables = probe.execute(
+                "SELECT COUNT(*) AS total FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'"
+            ).fetchone()["total"]
+            if existing_tables:
+                raise SystemExit("ERRO: PostgreSQL informado não está vazio; use um banco exclusivo de demonstração.")
+    elif os.getenv("DATABASE_URL", "").strip():
+        raise SystemExit("ERRO: DATABASE_URL está definida. Informe um PostgreSQL demo dedicado por --database-url ou remova a variável para usar SQLite.")
+    else:
+        configured_db = Path(os.getenv("DATABASE_PATH", ROOT / "barbearia.db")).expanduser().resolve()
+        if demo_db == configured_db or demo_db == ROOT / "barbearia.db":
+            raise SystemExit("ERRO: o banco operacional não pode ser usado como demonstração.")
+        if demo_db.suffixes[-2:] != [".demo", ".db"]:
+            raise SystemExit("ERRO: use um nome terminado em .demo.db para identificar a base isolada.")
     if not args.admin_email.strip() or "@" not in args.admin_email:
         raise SystemExit("ERRO: informe um e-mail válido para o administrador.")
 
-    if demo_db.exists():
+    if not postgres_demo and demo_db.exists():
         if not args.reset:
             os.environ["DATABASE_PATH"] = str(demo_db)
             from database import get_db
@@ -70,12 +105,16 @@ def main():
         for suffix in ("", "-wal", "-shm"):
             Path(str(demo_db) + suffix).unlink(missing_ok=True)
 
-    demo_db.parent.mkdir(parents=True, exist_ok=True)
+    if not postgres_demo:
+        demo_db.parent.mkdir(parents=True, exist_ok=True)
     supplied_password = os.getenv("DEMO_ADMIN_PASSWORD", "")
     if supplied_password and len(supplied_password) < 10:
         raise SystemExit("ERRO: DEMO_ADMIN_PASSWORD deve ter pelo menos 10 caracteres.")
     admin_password = supplied_password or (secrets.token_urlsafe(18) + "A9!")
-    os.environ["DATABASE_PATH"] = str(demo_db)
+    if postgres_demo:
+        os.environ["DATABASE_URL"] = args.database_url
+    else:
+        os.environ["DATABASE_PATH"] = str(demo_db)
     os.environ["INITIAL_ADMIN_EMAIL"] = args.admin_email.strip().lower()
     os.environ["INITIAL_ADMIN_PASSWORD"] = admin_password
 
@@ -94,9 +133,9 @@ def main():
         admin_id = admin["id"]
         admin_barber = conn.execute("SELECT id FROM barbers WHERE user_id=?", (admin_id,)).fetchone()
         if not admin_barber:
-            cur = conn.execute("INSERT INTO barbers (user_id, name, bio, active) VALUES (?, ?, ?, 1)",
+            cur = conn.execute("INSERT INTO barbers (user_id, name, bio, active) VALUES (?, ?, ?, 1) RETURNING id",
                                (admin_id, "Alexandre Costa", "Barbeiro responsável pela unidade demonstrativa."))
-            admin_barber_id = cur.lastrowid
+            admin_barber_id = cur.fetchone()["id"]
         else:
             admin_barber_id = admin_barber["id"]
 
@@ -105,24 +144,24 @@ def main():
         if not barber_user_id:
             cur = conn.execute("""
                 INSERT INTO users (name,email,phone,password_hash,role,first_access_required)
-                VALUES (?,?,?,?, 'barber',1)
+                VALUES (?,?,?,?, 'barber',1) RETURNING id
             """, ("Bruno Almeida", "barbeiro.demo@barberflow.local", "(11) 90000-0002",
                   hash_password(secrets.token_urlsafe(32))))
-            barber_user_id = cur.lastrowid
+            barber_user_id = cur.fetchone()["id"]
         else:
             barber_user_id = barber_user_id["id"]
         second_barber = conn.execute("SELECT id FROM barbers WHERE user_id=?", (barber_user_id,)).fetchone()
         if not second_barber:
             second_barber_id = conn.execute("""
                 INSERT INTO barbers (user_id,name,bio,active,work_start,work_end,lunch_start,lunch_end,work_days)
-                VALUES (?,?,?,1,'09:00','19:00','12:00','13:00','[1,2,3,4,5,6]')
-            """, (barber_user_id, "Bruno Almeida", "Especialista em degradê e barba.")).lastrowid
+                VALUES (?,?,?,1,'09:00','19:00','12:00','13:00','[1,2,3,4,5,6]') RETURNING id
+            """, (barber_user_id, "Bruno Almeida", "Especialista em degradê e barba.")).fetchone()["id"]
         else:
             second_barber_id = second_barber["id"]
 
-        conn.execute("INSERT OR REPLACE INTO barber_commission_settings (barber_id,commission_percent) VALUES (?,?)",
+        conn.execute("INSERT INTO barber_commission_settings (barber_id,commission_percent) VALUES (?,?) ON CONFLICT(barber_id) DO UPDATE SET commission_percent=excluded.commission_percent",
                      (admin_barber_id, 50))
-        conn.execute("INSERT OR REPLACE INTO barber_commission_settings (barber_id,commission_percent) VALUES (?,?)",
+        conn.execute("INSERT INTO barber_commission_settings (barber_id,commission_percent) VALUES (?,?) ON CONFLICT(barber_id) DO UPDATE SET commission_percent=excluded.commission_percent",
                      (second_barber_id, 45))
 
         customers = [
@@ -145,9 +184,9 @@ def main():
             else:
                 cur = conn.execute("""
                     INSERT INTO users (name,email,phone,password_hash,role,first_access_required)
-                    VALUES (?,?,?,?, 'customer',1)
+                    VALUES (?,?,?,?, 'customer',1) RETURNING id
                 """, (name,email,phone,hash_password(secrets.token_urlsafe(32))))
-                customer_ids.append(cur.lastrowid)
+                customer_ids.append(cur.fetchone()["id"])
 
         services = conn.execute("SELECT id,name,price,duration_min FROM services ORDER BY id").fetchall()
         products = conn.execute("SELECT id,name,price FROM products ORDER BY id").fetchall()
@@ -168,6 +207,37 @@ def main():
         # Compras e vendas distribuídas pelos últimos seis meses.
         order_count = 0
         for month_offset in range(-6, 0):
+            # Entrada de estoque e saída de caixa explícitas em cada mês.
+            # Não dependemos de o saldo inicial acabar para que a demonstração
+            # tenha histórico realista de reposição de produtos.
+            purchase_product = products[abs(month_offset) % len(products)]
+            purchase_quantity = 8
+            purchase_cost_cents = round(float(purchase_product["price"]) * 0.48 * 100)
+            purchase_day = month_date(month_offset, 3)
+            conn.execute(
+                "UPDATE products SET stock=stock+? WHERE id=?",
+                (purchase_quantity, purchase_product["id"]),
+            )
+            conn.execute("""
+                INSERT INTO stock_movements
+                    (product_id,movement_type,quantity,unit_cost_cents,note,created_by,created_at)
+                VALUES (?,'purchase',?,?,?,?,?)
+            """, (
+                purchase_product["id"], purchase_quantity, purchase_cost_cents,
+                "Reposição fictícia mensal de estoque", admin_id,
+                datetime.combine(purchase_day, datetime.min.time()).isoformat(sep=" "),
+            ))
+            conn.execute("""
+                INSERT INTO financial_transactions
+                    (transaction_type,category,description,amount_cents,occurred_on,
+                     payment_method,status,created_by,created_at)
+                VALUES ('expense','Estoque',?,?,?,'pix','paid',?,?)
+            """, (
+                f"Compra demonstrativa de {purchase_product['name']}",
+                purchase_cost_cents * purchase_quantity, purchase_day.isoformat(), admin_id,
+                datetime.combine(purchase_day, datetime.min.time()).isoformat(sep=" "),
+            ))
+
             for batch in range(4):
                 day = 4 + batch * 6
                 occurred = month_date(month_offset, day)
@@ -183,12 +253,12 @@ def main():
                 status = ("paid", "paid", "pending", "cancelled")[batch]
                 cur = conn.execute("""
                     INSERT INTO orders (user_id,customer_name,customer_phone,address,total,status,payment_method,created_at)
-                    VALUES (?,?,?,?,?,?,?,?)
+                    VALUES (?,?,?,?,?,?,?,?) RETURNING id
                 """, (customer_id, customers[customer_ids.index(customer_id)][0],
                       customers[customer_ids.index(customer_id)][2], "Endereço fictício - unidade demo",
                       round(total, 2), status, ("pix","cartao","dinheiro","pix")[batch],
                       datetime.combine(occurred, datetime.min.time()).isoformat(sep=" ")))
-                order_id = cur.lastrowid
+                order_id = cur.fetchone()["id"]
                 order_count += 1
                 for product, qty in items:
                     current_stock = conn.execute("SELECT stock FROM products WHERE id=?", (product["id"],)).fetchone()["stock"]
@@ -254,14 +324,14 @@ def main():
                 start_hour = 9 + (index % 5)
                 start_time = f"{start_hour:02d}:00"
                 end_dt = datetime.combine(service_day, datetime.strptime(start_time, "%H:%M").time()) + timedelta(minutes=service["duration_min"])
-                conn.execute("""
+                cur = conn.execute("""
                     INSERT INTO appointments
                         (user_id,barber_id,service_id,appointment_date,start_time,end_time,status,notes,service_price_cents)
-                    VALUES (?,?,?,?,?,?,'completed',?,?)
+                    VALUES (?,?,?,?,?,?,'completed',?,?) RETURNING id
                 """, (customer_id, barber_id, service["id"], service_day.isoformat(), start_time,
                       end_dt.strftime("%H:%M"), "Atendimento fictício para demonstração.",
                       round(float(service["price"]) * 100)))
-                appointment_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                appointment_id = cur.fetchone()["id"]
                 conn.execute("""
                     INSERT INTO financial_transactions
                         (transaction_type,category,description,amount_cents,occurred_on,status,barber_id,appointment_id,created_by)
@@ -284,7 +354,7 @@ def main():
                   "Agendamento futuro fictício.", round(float(service["price"]) * 100)))
 
         conn.execute("UPDATE settings SET value='BARBERFLOW DEMONSTRAÇÃO' WHERE key='shop_name'")
-        conn.execute("INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)", (MARKER_KEY, MARKER_VERSION))
+        conn.execute("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (MARKER_KEY, MARKER_VERSION))
         conn.commit()
 
         summary = {
@@ -294,6 +364,9 @@ def main():
             "atendimentos": conn.execute("SELECT COUNT(*) FROM appointments").fetchone()[0],
             "lancamentos_financeiros": conn.execute("SELECT COUNT(*) FROM financial_transactions").fetchone()[0],
             "movimentacoes_estoque": conn.execute("SELECT COUNT(*) FROM stock_movements").fetchone()[0],
+            "entradas_compra_estoque": conn.execute(
+                "SELECT COUNT(*) FROM stock_movements WHERE movement_type='purchase'"
+            ).fetchone()[0],
         }
     except Exception:
         conn.rollback()
@@ -302,7 +375,7 @@ def main():
         conn.close()
 
     print("\nBASE DE DEMONSTRAÇÃO CRIADA")
-    print(f"Banco: {demo_db}")
+    print("Banco: PostgreSQL dedicado" if postgres_demo else f"Banco: {demo_db}")
     print(f"Administrador: {args.admin_email.strip().lower()}")
     if supplied_password:
         print("Senha administrativa definida por DEMO_ADMIN_PASSWORD (não exibida por segurança).")
@@ -310,7 +383,7 @@ def main():
         print(f"Senha inicial (guarde agora): {admin_password}")
     print("A conta é exclusiva desta base. Altere a senha após o primeiro acesso.")
     print("Resumo: " + ", ".join(f"{key}={value}" for key, value in summary.items()))
-    print("Para iniciar a aplicação com esta base, defina DATABASE_PATH para o caminho acima antes de iniciar o servidor.")
+    print("Para iniciar a aplicação com esta base, configure DATABASE_URL para o banco demo." if postgres_demo else "Para iniciar a aplicação com esta base, defina DATABASE_PATH para o caminho acima antes de iniciar o servidor.")
 
 
 if __name__ == "__main__":
