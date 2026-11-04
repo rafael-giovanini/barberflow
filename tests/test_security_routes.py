@@ -2113,35 +2113,28 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertIn('href="/esqueci-senha"', response.text)
         self.assertNotIn('action="/primeiro-acesso"', response.text)
 
-    def test_first_access_sends_email_link_and_activates_customer_once(self):
+    def test_first_access_uses_barbershop_code_without_sending_email(self):
         self._login("admin@example.test")
-        created = self.client.post("/admin/clientes/novo", data=self._customer_form(
-            email="primeiro.acesso@example.test", cpf="52998224725"))
-        self.assertEqual(created.status_code, 303)
+        with patch("security_routes.smtplib.SMTP") as smtp_factory:
+            created = self.client.post("/admin/clientes/novo", data=self._customer_form(
+                email="primeiro.acesso@example.test", cpf="52998224725"))
+        self.assertEqual(created.status_code, 200)
+        self.assertIn("Envie este código ao cliente pelo WhatsApp", created.text)
+        code_match = re.search(r'id="first-access-code">([A-F0-9-]+)</p>', created.text)
+        self.assertIsNotNone(code_match)
+        code = code_match.group(1)
+        smtp_factory.assert_not_called()
+
         pending_login = self._login("primeiro.acesso@example.test", "SenhaCliente-456")
         self.assertEqual(pending_login.status_code, 200)
-        self.assertIn("Primeiro acesso", pending_login.text)
+        self.assertIn("Sua conta ainda não foi ativada", pending_login.text)
 
-        env = {"APP_BASE_URL": "https://barberflow.example", "SMTP_HOST": "smtp.example.test",
-               "SMTP_FROM": "BarberFlow <noreply@example.test>"}
-        with patch.dict(os.environ, env), patch("security_routes.smtplib.SMTP") as smtp_factory:
-            response = self.client.post("/primeiro-acesso", data={"cpf": "529.982.247-25"})
-            self.assertEqual(response.status_code, 200)
-            self.assertIn("link seguro para criar sua senha", response.text)
-            smtp = smtp_factory.return_value.__enter__.return_value
-            smtp.send_message.assert_called_once()
-            message = smtp.send_message.call_args.args[0]
-            plain_part = message.get_body(preferencelist=("plain",))
-            self.assertIsNotNone(plain_part)
-            token_match = re.search(r"/criar-senha\?token=([^\s]+)", plain_part.get_content())
-            self.assertIsNotNone(token_match)
-            token = token_match.group(1)
-
-        page = self.client.get("/criar-senha", params={"token": token})
-        self.assertEqual(page.status_code, 200)
-        self.assertIn('name="new_password"', page.text)
-        changed = self.client.post("/criar-senha", data={
-            "token": token, "new_password": "SenhaCliente-456", "confirm_password": "SenhaCliente-456"
+        start = self.client.post("/primeiro-acesso", data={"cpf": "529.982.247-25"})
+        self.assertEqual(start.status_code, 200)
+        self.assertIn('action="/primeiro-acesso/ativar"', start.text)
+        changed = self.client.post("/primeiro-acesso/ativar", data={
+            "cpf": "52998224725", "code": code,
+            "new_password": "SenhaCliente-456", "confirm_password": "SenhaCliente-456"
         })
         self.assertEqual(changed.status_code, 303)
         self.assertIn("senha_criada=1", changed.headers["location"])
@@ -2152,9 +2145,50 @@ class SecurityRouteTests(unittest.TestCase):
         db.close()
         self.assertEqual(account["first_access_required"], 0)
         self.assertEqual(self._login("primeiro.acesso@example.test", "SenhaCliente-456").status_code, 303)
-        reused = self.client.get("/criar-senha", params={"token": token})
-        self.assertNotIn('name="new_password"', reused.text)
-        self.assertIn("Solicite um novo link", reused.text)
+        reused = self.client.post("/primeiro-acesso/ativar", data={
+            "cpf": "52998224725", "code": code,
+            "new_password": "OutraSenha-789", "confirm_password": "OutraSenha-789"
+        })
+        self.assertEqual(reused.status_code, 200)
+        self.assertIn("CPF ou código inválido", reused.text)
+
+    def test_first_access_code_locks_after_five_invalid_attempts(self):
+        self._login("admin@example.test")
+        created = self.client.post("/admin/clientes/novo", data=self._customer_form(
+            email="codigo.bloqueio@example.test", cpf="52998224725"))
+        self.assertEqual(created.status_code, 200)
+        for _ in range(5):
+            response = self.client.post("/primeiro-acesso/ativar", data={
+                "cpf": "52998224725", "code": "0000-0000-0000-0000",
+                "new_password": "SenhaCliente-456", "confirm_password": "SenhaCliente-456"
+            })
+            self.assertEqual(response.status_code, 200)
+        db = self.app_module.get_db()
+        row = db.execute("""
+            SELECT failed_attempts, used_at FROM first_access_codes
+            JOIN users ON users.id=first_access_codes.user_id
+            WHERE users.email=?
+        """, ("codigo.bloqueio@example.test",)).fetchone()
+        db.close()
+        self.assertEqual(row["failed_attempts"], 5)
+        self.assertIsNone(row["used_at"])
+
+    def test_staff_can_issue_a_new_code_for_an_existing_pending_customer(self):
+        self._login("admin@example.test")
+        created = self.client.post("/admin/clientes/novo", data=self._customer_form(
+            email="codigo.novo@example.test", cpf="52998224725"))
+        first_code = re.search(r'id="first-access-code">([A-F0-9-]+)</p>', created.text).group(1)
+        db = self.app_module.get_db()
+        customer_id = db.execute(
+            "SELECT id FROM users WHERE email=?", ("codigo.novo@example.test",)
+        ).fetchone()["id"]
+        db.close()
+
+        renewed = self.client.post("/admin/clientes/codigo-primeiro-acesso",
+                                   data={"customer_id": customer_id})
+        self.assertEqual(renewed.status_code, 200)
+        second_code = re.search(r'id="first-access-code">([A-F0-9-]+)</p>', renewed.text).group(1)
+        self.assertNotEqual(first_code, second_code)
 
     def test_public_registration_requires_valid_cpf_and_full_customer_data(self):
         response = self.client.post("/cadastro", data=self._customer_form(
@@ -2170,15 +2204,21 @@ class SecurityRouteTests(unittest.TestCase):
         self._login("admin@example.test")
         response = self.client.post("/admin/clientes/novo", data=self._customer_form(
             email="pre.cadastro@example.test", cpf="52998224725"))
-        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("first-access-code", response.text)
         db = self.app_module.get_db()
         row = db.execute("SELECT first_access_required, cpf, password_hash FROM users WHERE email=?",
                          ("pre.cadastro@example.test",)).fetchone()
-        db.close()
         self.assertIsNotNone(row)
         self.assertEqual(row["first_access_required"], 1)
         self.assertEqual(row["cpf"], "52998224725")
         self.assertNotEqual(row["password_hash"], "")
+        code = db.execute("""
+            SELECT code_hash FROM first_access_codes
+            JOIN users ON users.id=first_access_codes.user_id WHERE users.email=?
+        """, ("pre.cadastro@example.test",)).fetchone()
+        db.close()
+        self.assertIsNotNone(code)
 
     def test_password_change_rejects_short_password_without_mutating_account(self):
         self._login("cliente@example.test")

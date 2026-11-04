@@ -35,7 +35,13 @@
           </dl>
           <div class="customer-record-actions">
             <span class="badge">{{ 'Ativo' if c.active else 'Desativado' }}</span>
-            {% if c.first_access_required %}<span class="badge">Aguardando primeiro acesso</span>{% endif %}
+            {% if c.first_access_required %}
+              <span class="badge">Aguardando primeiro acesso</span>
+              <form method="post" action="/admin/clientes/codigo-primeiro-acesso" style="display:inline;">
+                <input type="hidden" name="customer_id" value="{{ c.id }}">
+                <button class="btn btn-outline btn-sm" type="submit">Gerar código para WhatsApp</button>
+              </form>
+            {% endif %}
             <button class="btn btn-dourado btn-sm" type="button" data-customer-edit-button>Alterar dados</button>
           </div>
         </div>

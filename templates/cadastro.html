@@ -3,7 +3,7 @@
 {% block content %}
 <section class="section container" style="max-width:960px;"><div class="form-card customer-registration-card">
   <h2 class="section-title">Cadastro de cliente</h2>
-  {% if created %}<div class="success-msg">Cadastro realizado. Agora acesse <a href="/primeiro-acesso">Primeiro acesso</a> com seu CPF para receber no e-mail cadastrado o link para criar sua senha.</div>{% endif %}
+  {% if created %}<div class="success-msg">Cadastro recebido. Para criar sua senha, solicite à barbearia um código de primeiro acesso pelo WhatsApp e depois acesse <a href="/primeiro-acesso">Solicitar acesso</a>.</div>{% endif %}
   {% if request.query_params.get('cpf_nao_encontrado') %}<p class="text-muted">Não encontramos um cadastro para este CPF. Preencha seus dados para criar seu cadastro de cliente.</p>{% endif %}
   {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
   {% if not created %}<form method="post" action="/cadastro" class="customer-form-grid" data-address-form>
@@ -22,6 +22,6 @@
     <div class="form-group"><label for="state">Estado (UF)</label><input id="state" type="text" name="state" class="form-control" value="{{ values.get('state','') }}" minlength="2" maxlength="2" autocomplete="address-level1" required></div>
     <button type="submit" class="btn btn-dourado btn-block form-grid-full">Cadastrar dados</button>
   </form>{% endif %}
-  <p class="text-center mt-2 text-muted">Já tem cadastro? <a href="/primeiro-acesso">Criar senha no primeiro acesso</a></p>
+  <p class="text-center mt-2 text-muted">Já tem cadastro? <a href="/primeiro-acesso">Solicitar acesso</a></p>
 </div></section>
 {% endblock %}

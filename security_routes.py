@@ -4,6 +4,7 @@ A integração é registrada pelo app principal para reaproveitar o banco,
 templates e os helpers de autenticação existentes.
 """
 import hashlib
+import hmac
 from html import escape
 import os
 import secrets
@@ -13,6 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from email.message import EmailMessage
 
 from auth import normalize_cpf, valid_cpf, valid_birth_date
+from db_compat import is_postgresql_configured
 from smtp_settings import get_smtp_config
 from urllib.parse import urlencode
 
@@ -41,6 +43,12 @@ def register_security_routes(app, templates, get_db, get_current_user,
         if not user or user.get("role") not in ("admin", "barber"):
             return None
         return user
+
+    def generate_first_access_code():
+        raw_code = secrets.token_hex(8).upper()
+        display_code = "-".join(raw_code[index:index + 4] for index in range(0, len(raw_code), 4))
+        code_hash = hashlib.sha256(raw_code.encode("ascii")).hexdigest()
+        return display_code, code_hash
 
     def add_branded_email_html(message, db, recipient_name, intro, button_text, link, footer_note):
         setting = db.execute("SELECT value FROM settings WHERE key='shop_name'").fetchone()
@@ -174,6 +182,32 @@ def register_security_routes(app, templates, get_db, get_current_user,
         return render(request, "admin/cliente_novo.html", user, error=None, today=date.today().isoformat(),
                       **customer_form_values("", "", "", "", "", "", "", "", "", "", "", ""))
 
+    @app.post("/admin/clientes/codigo-primeiro-acesso", response_class=HTMLResponse)
+    def regenerar_codigo_primeiro_acesso(request: Request, customer_id: int = Form(...)):
+        user = staff_only(request)
+        if not user:
+            return RedirectResponse(url="/login", status_code=303)
+        db = get_db()
+        account = db.execute("""
+            SELECT id, name FROM users
+            WHERE id=? AND role='customer' AND active=1 AND first_access_required=1
+        """, (customer_id,)).fetchone()
+        if not account:
+            db.close()
+            return RedirectResponse(url="/admin/clientes?erro=codigo", status_code=303)
+        display_code, code_hash = generate_first_access_code()
+        db.execute("""
+            INSERT INTO first_access_codes (user_id, code_hash, created_at, used_at, failed_attempts)
+            VALUES (?, ?, ?, NULL, 0)
+            ON CONFLICT(user_id) DO UPDATE SET
+                code_hash=excluded.code_hash, created_at=excluded.created_at,
+                used_at=NULL, failed_attempts=0
+        """, (customer_id, code_hash, datetime.now(timezone.utc).isoformat()))
+        db.commit()
+        db.close()
+        return render(request, "admin/primeiro_acesso_codigo.html", user,
+                      customer_name=account["name"], generated_code=display_code)
+
     @app.post("/admin/clientes/novo", response_class=HTMLResponse)
     def novo_cliente_salvar(
         request: Request,
@@ -208,6 +242,7 @@ def register_security_routes(app, templates, get_db, get_current_user,
             return render(request, "admin/cliente_novo.html", user, today=date.today().isoformat(),
                           error="Informe uma data de nascimento válida, que não esteja no futuro.", **values)
 
+        display_code, access_code_hash = generate_first_access_code()
         db = get_db()
         try:
             db.execute("""
@@ -219,7 +254,12 @@ def register_security_routes(app, templates, get_db, get_current_user,
             """, (name, email, phone, cpf, birth_date, zip_code, address, address_number,
                   address_complement, neighborhood, city, state,
                   hash_password(secrets.token_urlsafe(32))))
-            account = db.execute("SELECT id, name, email FROM users WHERE cpf=?", (cpf,)).fetchone()
+            account = db.execute("SELECT id FROM users WHERE cpf=?", (cpf,)).fetchone()
+            db.execute("""
+                INSERT INTO first_access_codes (user_id, code_hash, created_at)
+                VALUES (?, ?, ?)
+            """, (account["id"], access_code_hash,
+                  datetime.now(timezone.utc).isoformat()))
             db.commit()
         except sqlite3.IntegrityError:
             db.rollback()
@@ -228,20 +268,16 @@ def register_security_routes(app, templates, get_db, get_current_user,
         finally:
             db.close()
 
-        # Envia um link de ativação ao e-mail previamente informado. O cadastro não
-        # fica acessível até o cliente definir uma senha a partir desse link.
-        db = get_db()
-        email_sent = send_first_access_email(account, db)
-        db.close()
-        return RedirectResponse(
-            url="/admin/clientes/novo?salvo=1" + ("&email=1" if email_sent else "&email=0"),
-            status_code=303
-        )
+        # O código em claro aparece apenas nesta resposta e não fica na URL nem
+        # armazenado no banco. A equipe o encaminha ao cliente por WhatsApp.
+        return render(request, "admin/cliente_novo.html", user, error=None,
+                      today=date.today().isoformat(), generated_code=display_code,
+                      **customer_form_values("", "", "", "", "", "", "", "", "", "", "", ""))
 
     @app.get("/primeiro-acesso", response_class=HTMLResponse)
     def primeiro_acesso_page(request: Request):
         return render(request, "primeiro_acesso.html", None, error=None, sent=False,
-                      not_found=False, has_password=False, cpf="")
+                      not_found=False, has_password=False, needs_code=False, cpf="")
 
     @app.post("/primeiro-acesso", response_class=HTMLResponse)
     def primeiro_acesso_cpf(request: Request, cpf: str = Form(...)):
@@ -249,7 +285,7 @@ def register_security_routes(app, templates, get_db, get_current_user,
         if not valid_cpf(normalized_cpf):
             return render(request, "primeiro_acesso.html", None,
                           error="Informe um CPF válido.", sent=False, not_found=False,
-                          has_password=False, cpf=cpf)
+                          has_password=False, needs_code=False, cpf=cpf)
         db = get_db()
         account = db.execute("""
             SELECT id, name, email, active, first_access_required FROM users
@@ -264,21 +300,83 @@ def register_security_routes(app, templates, get_db, get_current_user,
             db.close()
             return render(request, "primeiro_acesso.html", None,
                           error="Este cadastro está inativo. Peça à barbearia para reativá-lo.",
-                          sent=False, not_found=False, has_password=False, cpf=cpf)
+                          sent=False, not_found=False, has_password=False, needs_code=False, cpf=cpf)
         # Contas que já definiram senha devem usar o login, sem gerar um link
         # de redefinição por meio do fluxo de primeiro acesso.
         if not account["first_access_required"]:
             db.close()
             return render(request, "primeiro_acesso.html", None, error=None,
-                          sent=False, not_found=False, has_password=True, cpf="")
-        email_sent = send_first_access_email(account, db)
+                          sent=False, not_found=False, has_password=True, needs_code=False, cpf="")
         db.close()
-        if not email_sent:
+        return render(request, "primeiro_acesso.html", None, error=None, sent=False,
+                      not_found=False, has_password=False, needs_code=True, cpf=normalized_cpf)
+
+    @app.post("/primeiro-acesso/ativar", response_class=HTMLResponse)
+    def ativar_primeiro_acesso(
+        request: Request, cpf: str = Form(...), code: str = Form(...),
+        new_password: str = Form(...), confirm_password: str = Form(...)
+    ):
+        normalized_cpf = normalize_cpf(cpf)
+        if not valid_cpf(normalized_cpf):
             return render(request, "primeiro_acesso.html", None,
-                          error="Não foi possível enviar o link. Peça à barbearia para verificar a configuração de e-mail.",
-                          sent=False, not_found=False, has_password=False, cpf=cpf)
-        return render(request, "primeiro_acesso.html", None, error=None, sent=True,
-                      not_found=False, has_password=False, cpf="")
+                          error="CPF ou código inválido. Confira os dados e tente novamente.",
+                          sent=False, not_found=False, has_password=False,
+                          needs_code=True, cpf=normalized_cpf)
+        if len(new_password) < 10 or new_password != confirm_password:
+            return render(request, "primeiro_acesso.html", None,
+                          error="A senha deve ter pelo menos 10 caracteres e os campos precisam ser iguais.",
+                          sent=False, not_found=False, has_password=False,
+                          needs_code=True, cpf=normalized_cpf)
+
+        normalized_code = "".join(char for char in code.upper() if char.isalnum())
+        code_hash = hashlib.sha256(normalized_code.encode("ascii", errors="ignore")).hexdigest()
+        db = get_db()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            sql = """
+                SELECT u.id, c.code_hash, c.failed_attempts
+                FROM users u JOIN first_access_codes c ON c.user_id=u.id
+                WHERE REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(u.cpf, ''), '.', ''), '-', ''), ' ', ''), '/', '')=?
+                  AND u.role='customer' AND u.active=1 AND u.first_access_required=1
+                  AND c.used_at IS NULL
+            """
+            if is_postgresql_configured():
+                sql += " FOR UPDATE OF u, c"
+            account = db.execute(sql, (normalized_cpf,)).fetchone()
+            if not account or account["failed_attempts"] >= 5 or not hmac.compare_digest(
+                account["code_hash"], code_hash
+            ):
+                if account and account["failed_attempts"] < 5:
+                    db.execute(
+                        "UPDATE first_access_codes SET failed_attempts=failed_attempts+1 WHERE user_id=?",
+                        (account["id"],)
+                    )
+                db.commit()
+                return render(request, "primeiro_acesso.html", None,
+                              error="CPF ou código inválido. Confira os dados e tente novamente.",
+                              sent=False, not_found=False, has_password=False,
+                              needs_code=True, cpf=normalized_cpf)
+
+            now = datetime.now(timezone.utc).isoformat()
+            consumed = db.execute("""
+                UPDATE first_access_codes SET used_at=?
+                WHERE user_id=? AND used_at IS NULL AND failed_attempts < 5
+            """, (now, account["id"]))
+            updated = db.execute("""
+                UPDATE users SET password_hash=?, first_access_required=0,
+                    session_version=session_version+1
+                WHERE id=? AND role='customer' AND active=1 AND first_access_required=1
+            """, (hash_password(new_password), account["id"]))
+            if consumed.rowcount != 1 or updated.rowcount != 1:
+                db.rollback()
+                return render(request, "primeiro_acesso.html", None,
+                              error="CPF ou código inválido. Confira os dados e tente novamente.",
+                              sent=False, not_found=False, has_password=False,
+                              needs_code=True, cpf=normalized_cpf)
+            db.commit()
+        finally:
+            db.close()
+        return RedirectResponse(url="/login?senha_criada=1", status_code=303)
 
     @app.get("/criar-senha", response_class=HTMLResponse)
     def criar_senha_page(request: Request, token: str = ""):

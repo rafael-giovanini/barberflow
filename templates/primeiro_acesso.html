@@ -3,16 +3,24 @@
 {% block content %}
 <div class="form-card">
   <h2>Solicitar acesso</h2>
-  <p class="text-muted">Informe o CPF usado no cadastro para verificar como acessar sua conta.</p>
+  <p class="text-muted">Informe o CPF usado no cadastro. Se ainda não tem senha, peça o código de primeiro acesso à barbearia pelo WhatsApp.</p>
   {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
   {% if has_password %}
   <div class="success-msg">Este cadastro já tem uma senha. Faça login com seu e-mail e senha. Se não lembrar a senha, use “Esqueci minha senha”.</div>
   <p><a class="btn btn-dourado btn-block" href="/login">Ir para o login</a></p>
   <p class="text-center mt-2"><a href="/esqueci-senha">Esqueci minha senha</a></p>
   {% endif %}
-  {% if sent %}<div class="success-msg">Enviamos ao e-mail cadastrado um link seguro para criar sua senha. Verifique também a caixa de spam.</div>{% endif %}
   {% if not_found %}<div class="error-msg">Não encontramos um cadastro ativo para este CPF.</div><p><a class="btn btn-dourado btn-block" href="/cadastro?cpf_nao_encontrado=1">Cadastrar dados de cliente</a></p>{% endif %}
-  {% if not sent and not_found == false and not has_password %}<form method="post" action="/primeiro-acesso">
+  {% if needs_code %}
+  <p class="text-muted">Digite o código recebido e escolha sua senha. O código só pode ser usado uma vez.</p>
+  <form method="post" action="/primeiro-acesso/ativar">
+    <input type="hidden" name="cpf" value="{{ cpf }}">
+    <div class="form-group"><label for="code">Código de primeiro acesso</label><input id="code" type="text" name="code" class="form-control" autocomplete="one-time-code" maxlength="19" required></div>
+    <div class="form-group"><label for="new_password">Criar senha</label><input id="new_password" type="password" name="new_password" class="form-control" autocomplete="new-password" minlength="10" required><small>Use pelo menos 10 caracteres.</small></div>
+    <div class="form-group"><label for="confirm_password">Confirmar senha</label><input id="confirm_password" type="password" name="confirm_password" class="form-control" autocomplete="new-password" minlength="10" required></div>
+    <button type="submit" class="btn btn-dourado btn-block">Criar senha e ativar conta</button>
+  </form>
+  {% elif not sent and not_found == false and not has_password %}<form method="post" action="/primeiro-acesso">
     <div class="form-group"><label for="cpf">CPF</label><input id="cpf" type="text" name="cpf" data-mask="cpf" class="form-control" value="{{ cpf }}" inputmode="numeric" autocomplete="off" placeholder="000.000.000-00" required></div>
     <button type="submit" class="btn btn-dourado btn-block">Continuar</button>
   </form>{% endif %}

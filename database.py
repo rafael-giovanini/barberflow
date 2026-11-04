@@ -307,6 +307,18 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_password_reset_email_created
     ON password_reset_tokens(email, created_at)
     """)
+    # Código de primeiro acesso: somente o hash permanece no banco; o valor em
+    # claro é exibido uma vez à equipe para encaminhamento manual ao cliente.
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS first_access_codes (
+        user_id INTEGER PRIMARY KEY,
+        code_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        used_at TEXT,
+        failed_attempts INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    """)
 
 
     # Financeiro: lançamentos manuais e configuração de comissão por barbeiro.

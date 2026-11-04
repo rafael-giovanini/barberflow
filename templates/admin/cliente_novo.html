@@ -4,10 +4,17 @@
 <section class="section container" style="max-width:960px;">
   <div class="form-card customer-registration-card">
     <h2 class="section-title">Cadastrar cliente</h2>
-    <p class="text-muted">Informe os dados do cliente. Ele receberá um link no e-mail cadastrado para criar a própria senha.</p>
+    <p class="text-muted">Informe os dados do cliente. Após o cadastro, será gerado um código de primeiro acesso para você encaminhar pelo WhatsApp. O cliente criará a própria senha no site.</p>
+    {% if generated_code %}
+      <div class="success-msg" role="status">
+        <strong>Cliente cadastrado. Envie este código ao cliente pelo WhatsApp:</strong>
+        <p style="font-size:1.4rem;font-weight:700;letter-spacing:.12em;margin:.75rem 0;" id="first-access-code">{{ generated_code }}</p>
+        <button type="button" class="btn btn-outline btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('first-access-code').textContent.trim())">Copiar código</button>
+        <small style="display:block;margin-top:.5rem;">Este código será mostrado somente agora. Ele é de uso único e bloqueia após cinco tentativas incorretas.</small>
+      </div>
+    {% endif %}
     {% if request.query_params.get('salvo') %}
-      {% if request.query_params.get('email') == '1' %}<div class="success-msg">Cliente cadastrado. O link para criar a senha foi enviado ao e-mail informado.</div>
-      {% else %}<div class="success-msg">Cliente cadastrado. Para enviar o link de criação de senha, configure o SMTP e solicite o primeiro acesso.</div>{% endif %}
+      <div class="success-msg">Cliente cadastrado.</div>
     {% endif %}
     {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
     <form method="post" action="/admin/clientes/novo" class="customer-form-grid" data-address-form>

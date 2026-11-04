@@ -457,7 +457,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
     if not valid:
         error = "E-mail ou senha inválidos."
         if user and user["active"] and user["first_access_required"]:
-            error = "Sua conta ainda não foi ativada. Use Primeiro acesso para criar sua senha."
+            error = "Sua conta ainda não foi ativada. Use “Solicitar acesso” e informe o código fornecido pela barbearia."
         return templates.TemplateResponse("login.html", {
             "request": request, "user": None, "error": error
         })

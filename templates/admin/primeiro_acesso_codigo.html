@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Código de primeiro acesso — BarberFlow{% endblock %}
+{% block content %}
+<section class="section container" style="max-width:700px;">
+  <div class="form-card">
+    <h2 class="section-title">Código de primeiro acesso</h2>
+    <p>Envie este código para <strong>{{ customer_name }}</strong> pelo WhatsApp. A pessoa usará o código e criará a própria senha.</p>
+    <div class="success-msg" role="status">
+      <p style="font-size:1.4rem;font-weight:700;letter-spacing:.12em;margin:.75rem 0;" id="first-access-code">{{ generated_code }}</p>
+      <button type="button" class="btn btn-outline btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('first-access-code').textContent.trim())">Copiar código</button>
+      <small style="display:block;margin-top:.5rem;">Código de uso único; será invalidado após cinco tentativas incorretas.</small>
+    </div>
+    <p class="text-center mt-2"><a href="/admin/clientes">Voltar à gestão de clientes</a></p>
+  </div>
+</section>
+{% endblock %}
