@@ -2096,6 +2096,23 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/cadastro?cpf_nao_encontrado=1")
 
+    def test_first_access_with_existing_password_directs_customer_to_login(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO users (name, email, cpf, password_hash, first_access_required, role)
+            VALUES (?, ?, ?, ?, 0, 'customer')
+        """, ("Cliente com senha", "cliente.com.senha@example.test", "52998224725",
+              self.app_module.hash_password("SenhaCliente-456")))
+        db.commit()
+        db.close()
+
+        response = self.client.post("/primeiro-acesso", data={"cpf": "529.982.247-25"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Este cadastro já tem uma senha", response.text)
+        self.assertIn('href="/login"', response.text)
+        self.assertIn('href="/esqueci-senha"', response.text)
+        self.assertNotIn('action="/primeiro-acesso"', response.text)
+
     def test_first_access_sends_email_link_and_activates_customer_once(self):
         self._login("admin@example.test")
         created = self.client.post("/admin/clientes/novo", data=self._customer_form(
@@ -2110,7 +2127,7 @@ class SecurityRouteTests(unittest.TestCase):
         with patch.dict(os.environ, env), patch("security_routes.smtplib.SMTP") as smtp_factory:
             response = self.client.post("/primeiro-acesso", data={"cpf": "529.982.247-25"})
             self.assertEqual(response.status_code, 200)
-            self.assertIn("o link será enviado", response.text)
+            self.assertIn("link seguro para criar sua senha", response.text)
             smtp = smtp_factory.return_value.__enter__.return_value
             smtp.send_message.assert_called_once()
             message = smtp.send_message.call_args.args[0]

@@ -2,14 +2,19 @@
 {% block title %}Primeiro acesso — BarberFlow{% endblock %}
 {% block content %}
 <div class="form-card">
-  <h2>Primeiro acesso</h2>
-  <p class="text-muted">Informe o CPF usado no cadastro. Enviaremos um link para criar ou redefinir sua senha ao e-mail registrado.</p>
+  <h2>Solicitar acesso</h2>
+  <p class="text-muted">Informe o CPF usado no cadastro para verificar como acessar sua conta.</p>
   {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
-  {% if sent %}<div class="success-msg">Se houver um cadastro ativo para este CPF, o link será enviado ao e-mail registrado. Verifique também a caixa de spam.</div>{% endif %}
+  {% if has_password %}
+  <div class="success-msg">Este cadastro já tem uma senha. Faça login com seu e-mail e senha. Se não lembrar a senha, use “Esqueci minha senha”.</div>
+  <p><a class="btn btn-dourado btn-block" href="/login">Ir para o login</a></p>
+  <p class="text-center mt-2"><a href="/esqueci-senha">Esqueci minha senha</a></p>
+  {% endif %}
+  {% if sent %}<div class="success-msg">Enviamos ao e-mail cadastrado um link seguro para criar sua senha. Verifique também a caixa de spam.</div>{% endif %}
   {% if not_found %}<div class="error-msg">Não encontramos um cadastro ativo para este CPF.</div><p><a class="btn btn-dourado btn-block" href="/cadastro?cpf_nao_encontrado=1">Cadastrar dados de cliente</a></p>{% endif %}
-  {% if not sent and not_found == false %}<form method="post" action="/primeiro-acesso">
+  {% if not sent and not_found == false and not has_password %}<form method="post" action="/primeiro-acesso">
     <div class="form-group"><label for="cpf">CPF</label><input id="cpf" type="text" name="cpf" data-mask="cpf" class="form-control" value="{{ cpf }}" inputmode="numeric" autocomplete="off" placeholder="000.000.000-00" required></div>
-    <button type="submit" class="btn btn-dourado btn-block">Consultar CPF</button>
+    <button type="submit" class="btn btn-dourado btn-block">Continuar</button>
   </form>{% endif %}
   <p class="text-center mt-2"><a href="/login">Voltar ao login</a></p>
 </div>

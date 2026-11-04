@@ -241,17 +241,18 @@ def register_security_routes(app, templates, get_db, get_current_user,
     @app.get("/primeiro-acesso", response_class=HTMLResponse)
     def primeiro_acesso_page(request: Request):
         return render(request, "primeiro_acesso.html", None, error=None, sent=False,
-                      not_found=False, cpf="")
+                      not_found=False, has_password=False, cpf="")
 
     @app.post("/primeiro-acesso", response_class=HTMLResponse)
     def primeiro_acesso_cpf(request: Request, cpf: str = Form(...)):
         normalized_cpf = normalize_cpf(cpf)
         if not valid_cpf(normalized_cpf):
             return render(request, "primeiro_acesso.html", None,
-                          error="Informe um CPF válido.", sent=False, not_found=False, cpf=cpf)
+                          error="Informe um CPF válido.", sent=False, not_found=False,
+                          has_password=False, cpf=cpf)
         db = get_db()
         account = db.execute("""
-            SELECT id, name, email, active FROM users
+            SELECT id, name, email, active, first_access_required FROM users
             WHERE REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(cpf, ''), '.', ''), '-', ''), ' ', ''), '/', '')=?
               AND role='customer'
             LIMIT 1
@@ -263,15 +264,21 @@ def register_security_routes(app, templates, get_db, get_current_user,
             db.close()
             return render(request, "primeiro_acesso.html", None,
                           error="Este cadastro está inativo. Peça à barbearia para reativá-lo.",
-                          sent=False, not_found=False, cpf=cpf)
+                          sent=False, not_found=False, has_password=False, cpf=cpf)
+        # Contas que já definiram senha devem usar o login, sem gerar um link
+        # de redefinição por meio do fluxo de primeiro acesso.
+        if not account["first_access_required"]:
+            db.close()
+            return render(request, "primeiro_acesso.html", None, error=None,
+                          sent=False, not_found=False, has_password=True, cpf="")
         email_sent = send_first_access_email(account, db)
         db.close()
         if not email_sent:
             return render(request, "primeiro_acesso.html", None,
                           error="Não foi possível enviar o link. Peça à barbearia para verificar a configuração de e-mail.",
-                          sent=False, not_found=False, cpf="")
+                          sent=False, not_found=False, has_password=False, cpf=cpf)
         return render(request, "primeiro_acesso.html", None, error=None, sent=True,
-                      not_found=False, cpf="")
+                      not_found=False, has_password=False, cpf="")
 
     @app.get("/criar-senha", response_class=HTMLResponse)
     def criar_senha_page(request: Request, token: str = ""):
