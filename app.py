@@ -1802,12 +1802,20 @@ def admin_pedidos(request: Request):
     if not user or user.get("role") not in ("admin", "barber"):
         return RedirectResponse(url="/login", status_code=303)
     db = get_db()
+    # SQLite chama a agregação de texto de GROUP_CONCAT; no PostgreSQL o
+    # equivalente é STRING_AGG. Manter a escolha explícita evita que a página
+    # de pedidos quebre apenas quando o Render está conectado ao Neon.
+    items_summary_sql = (
+        "STRING_AGG(product_name || ' x' || quantity::text, ', ')"
+        if is_postgresql_configured()
+        else "GROUP_CONCAT(product_name || ' x' || quantity, ', ')"
+    )
     orders = db.execute("""
         SELECT o.*, 
-               (SELECT GROUP_CONCAT(product_name || ' x' || quantity, ', ') 
+               (SELECT {items_summary_sql}
                 FROM order_items WHERE order_id=o.id) as items_summary
         FROM orders o ORDER BY o.created_at DESC
-    """).fetchall()
+    """.format(items_summary_sql=items_summary_sql)).fetchall()
     db.close()
     return templates.TemplateResponse("admin/pedidos.html", {"request": request, "user": user, "orders": orders})
 
