@@ -407,26 +407,46 @@ def login_page(request: Request):
 
 
 @app.post("/login")
-def login(request: Request, email: str = Form(...), password: str = Form(...)):
-    normalized_email = email.strip().lower()
+def login(request: Request, password: str = Form(...),
+          identifier: str = Form(""), email: str = Form("")):
+    # Mantém compatibilidade com clientes que ainda enviem o campo legado email.
+    identifier = identifier or email
+    identifier = identifier.strip()
+    normalized_identifier = identifier.lower()
+    cpf_digits = normalize_cpf(identifier)
+    is_cpf = "@" not in identifier and len(cpf_digits) == 11
     client_ip = request.client.host if request.client else "unknown"
     now = datetime.utcnow()
     window_start = (now - timedelta(minutes=15)).isoformat()
 
     db = get_db()
+    if is_cpf:
+        user = db.execute("""
+            SELECT * FROM users
+            WHERE REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(cpf, ''), '.', ''), '-', ''), ' ', ''), '/', '')=?
+            ORDER BY CASE WHEN role='customer' THEN 0 ELSE 1 END, id
+            LIMIT 1
+        """, (cpf_digits,)).fetchone()
+    else:
+        user = db.execute("SELECT * FROM users WHERE email=?", (normalized_identifier,)).fetchone()
+    # Vincula as tentativas à conta, não ao formato digitado: alternar CPF/e-mail
+    # não reinicia o limite de força bruta.
+    attempt_key = user["email"].strip().lower() if user else (
+        f"cpf:{cpf_digits}" if is_cpf else normalized_identifier
+    )
     # Limite persistente no SQLite: continua funcionando entre reinicializações.
     attempts = db.execute("""
         SELECT COUNT(*) AS total FROM auth_login_attempts
         WHERE email=? AND client_ip=? AND attempted_at >= ? AND succeeded=0
-    """, (normalized_email, client_ip, window_start)).fetchone()["total"]
+    """, (attempt_key, client_ip, window_start)).fetchone()["total"]
     if attempts >= 10:
         db.close()
         return templates.TemplateResponse("login.html", {
             "request": request, "user": None,
-            "error": "Muitas tentativas de acesso. Aguarde 15 minutos e tente novamente."
+            "error": "Muitas tentativas de acesso. Aguarde 15 minutos e tente novamente.",
+            "identifier": identifier
         }, status_code=429)
 
-    user = db.execute("SELECT * FROM users WHERE email=?", (normalized_email,)).fetchone()
     valid = bool(user and user["active"] and not user["first_access_required"]
                  and verify_password(password, user["password_hash"]))
     if valid:
@@ -442,12 +462,12 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
                        (upgraded_hash, user["id"]))
     db.execute(
         "INSERT INTO auth_login_attempts (email, client_ip, attempted_at, succeeded) VALUES (?, ?, ?, ?)",
-        (normalized_email, client_ip, now.isoformat(), 1 if valid else 0),
+        (attempt_key, client_ip, now.isoformat(), 1 if valid else 0),
     )
     if valid:
         # Um login válido remove falhas anteriores para não manter o usuário bloqueado.
         db.execute("DELETE FROM auth_login_attempts WHERE email=? AND client_ip=? AND succeeded=0",
-                   (normalized_email, client_ip))
+                   (attempt_key, client_ip))
     # Limpeza limitada para impedir crescimento indefinido da tabela de tentativas.
     db.execute("DELETE FROM auth_login_attempts WHERE attempted_at < ?",
                ((now - timedelta(days=7)).isoformat(),))
@@ -459,7 +479,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
         if user and user["active"] and user["first_access_required"]:
             error = "Sua conta ainda não foi ativada. Use “Solicitar acesso” e informe o código fornecido pela barbearia."
         return templates.TemplateResponse("login.html", {
-            "request": request, "user": None, "error": error
+            "request": request, "user": None, "error": error, "identifier": identifier
         })
     resp = RedirectResponse(url="/admin" if user["role"] in ("admin", "barber") else "/area-cliente", status_code=303)
     set_session(resp, user["id"], user["role"], user["name"])

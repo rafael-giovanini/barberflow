@@ -6,8 +6,10 @@
   {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
   <form method="POST" action="/login">
     <div class="form-group">
-      <label>E-mail</label>
-      <input type="email" name="email" class="form-control" required placeholder="seu@email.com">
+      <label for="identifier">E-mail ou CPF</label>
+      <input id="identifier" type="text" name="identifier" class="form-control"
+             value="{{ identifier or '' }}" required autocomplete="username"
+             placeholder="seu@email.com ou 000.000.000-00">
     </div>
     <div class="form-group">
       <label>Senha</label>

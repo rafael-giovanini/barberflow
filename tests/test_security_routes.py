@@ -2113,6 +2113,39 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertIn('href="/esqueci-senha"', response.text)
         self.assertNotIn('action="/primeiro-acesso"', response.text)
 
+    def test_customer_can_log_in_with_cpf_with_or_without_formatting(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO users (name, email, cpf, password_hash, first_access_required, role)
+            VALUES (?, ?, ?, ?, 0, 'customer')
+        """, ("Cliente com CPF", "cliente.cpf@example.test", "52998224725",
+              self.app_module.hash_password("SenhaCliente-456")))
+        db.commit()
+        db.close()
+
+        for cpf in ("52998224725", "529.982.247-25"):
+            with self.subTest(cpf=cpf):
+                response = self.client.post("/login", data={
+                    "identifier": cpf, "password": "SenhaCliente-456"
+                })
+                self.assertEqual(response.status_code, 303)
+                self.assertEqual(response.headers["location"], "/area-cliente")
+
+    def test_customer_can_still_log_in_with_email(self):
+        db = self.app_module.get_db()
+        db.execute("""
+            INSERT INTO users (name, email, cpf, password_hash, first_access_required, role)
+            VALUES (?, ?, ?, ?, 0, 'customer')
+        """, ("Cliente com CPF", "cliente.email@example.test", "52998224725",
+              self.app_module.hash_password("SenhaCliente-456")))
+        db.commit()
+        db.close()
+        response = self.client.post("/login", data={
+            "identifier": "CLIENTE.EMAIL@example.test", "password": "SenhaCliente-456"
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/area-cliente")
+
     def test_first_access_uses_barbershop_code_without_sending_email(self):
         self._login("admin@example.test")
         with patch("security_routes.smtplib.SMTP") as smtp_factory:
