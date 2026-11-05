@@ -112,7 +112,7 @@
           <div class="detail">{{ a.service_name }} · {{ a.customer_phone }}{% if a.notes %} · {{ a.notes }}{% endif %}</div>
         </div>
         <div class="appt-actions">
-          <button class="btn btn-success btn-sm" onclick="updateStatus({{ a.id }}, 'completed')">✓ Feito</button>
+          <button class="btn btn-success btn-sm" onclick="completeAppointment({{ a.id }})">✓ Feito</button>
           <button class="btn btn-danger btn-sm" onclick="updateStatus({{ a.id }}, 'cancelled')">✕ Cancelar</button>
         </div>
       </div>
@@ -127,6 +127,23 @@
 </div>
 {% endblock %}
 {% block scripts %}
+<dialog id="payment-dialog" class="payment-dialog">
+  <form method="dialog">
+    <h3>Forma de pagamento</h3>
+    <p>Selecione como o cliente pagou antes de concluir o atendimento.</p>
+    <label for="payment-method">Pagamento</label>
+    <select id="payment-method" class="form-control" required>
+      <option value="">Selecione</option>
+      <option value="Cartão">Cartão</option>
+      <option value="Pix">PIX</option>
+      <option value="Dinheiro">Dinheiro</option>
+    </select>
+    <div class="flex mt-2">
+      <button class="btn btn-outline" value="cancel">Voltar</button>
+      <button class="btn btn-dourado" value="confirm" onclick="return validatePaymentSelection()">Concluir atendimento</button>
+    </div>
+  </form>
+</dialog>
 <script>
   const monthForm = document.querySelector(".management-month-form");
   if (monthForm) {
@@ -147,11 +164,33 @@
     });
   }
 
-async function updateStatus(id, status) {
-  await fetch('/admin/agenda/status', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({appointment_id: id, status: status})
+function validatePaymentSelection() {
+  const select = document.getElementById('payment-method');
+  if (!select.value) { select.focus(); return false; }
+  return true;
+}
+function choosePaymentMethod() {
+  const dialog = document.getElementById('payment-dialog');
+  const select = document.getElementById('payment-method');
+  select.value = '';
+  return new Promise(resolve => {
+    dialog.addEventListener('close', () => resolve(
+      dialog.returnValue === 'confirm' ? select.value : null
+    ), { once: true });
+    dialog.showModal();
   });
+}
+async function completeAppointment(id) {
+  const paymentMethod = await choosePaymentMethod();
+  if (paymentMethod) await updateStatus(id, 'completed', paymentMethod);
+}
+async function updateStatus(id, status, paymentMethod = null) {
+  const response = await fetch('/admin/agenda/status', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({appointment_id: id, status: status, payment_method: paymentMethod})
+  });
+  const data = await response.json();
+  if (!response.ok || !data.ok) { showToast(data.error || 'Não foi possível atualizar o atendimento.', 'error'); return; }
   showToast(status === 'completed' ? 'Marcado como concluído!' : 'Agendamento cancelado.', 'success');
   setTimeout(() => location.reload(), 800);
 }

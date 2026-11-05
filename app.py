@@ -1442,10 +1442,15 @@ async def admin_agenda_status(request: Request):
         data = await request.json()
         appointment_id = int(data["appointment_id"])
         status = str(data["status"]).strip().lower()
+        payment_method = str(data.get("payment_method", "")).strip()
     except (ValueError, TypeError, KeyError):
         return JSONResponse({"ok": False, "error": "Dados inválidos."}, status_code=400)
     if status not in {"scheduled", "completed", "cancelled"}:
         return JSONResponse({"ok": False, "error": "Status inválido."}, status_code=400)
+    if payment_method and payment_method not in {"Cartão", "Pix", "Dinheiro"}:
+        return JSONResponse({"ok": False, "error": "Forma de pagamento inválida."}, status_code=400)
+    if payment_method and status != "completed":
+        return JSONResponse({"ok": False, "error": "A forma de pagamento só pode ser informada ao concluir o atendimento."}, status_code=400)
     db = get_db()
     try:
         # Verifica primeiro se o agendamento existe e se o usuário pode acessá-lo.
@@ -1531,15 +1536,17 @@ async def admin_agenda_status(request: Request):
                 db.execute("""
                     INSERT INTO financial_transactions
                         (transaction_type, category, description, amount_cents,
-                         occurred_on, status, barber_id, appointment_id, created_by)
+                         occurred_on, payment_method, status, barber_id, appointment_id, created_by)
                     VALUES ('income', 'Serviços', ?, ?, date('now', 'localtime'),
-                            'pending', ?, ?, ?)
+                            ?, ?, ?, ?, ?)
                     ON CONFLICT(appointment_id) WHERE appointment_id IS NOT NULL
-                    DO UPDATE SET status='pending', amount_cents=excluded.amount_cents,
+                    DO UPDATE SET status=excluded.status, payment_method=excluded.payment_method,
+                                  amount_cents=excluded.amount_cents,
                                   barber_id=excluded.barber_id
                     WHERE financial_transactions.status != 'paid'
                 """, (
                     f"Atendimento concluído #{appointment_id}", price_cents,
+                    payment_method or None, "paid" if payment_method else "pending",
                     appointment["barber_id"], appointment_id, user["user_id"],
                 ))
         else:

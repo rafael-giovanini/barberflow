@@ -206,6 +206,16 @@ select.form-control { appearance: none; background-image: url("data:image/svg+xm
   transform: none; box-shadow: none;
 }
 .slot-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.payment-dialog {
+  width: min(92vw, 440px); padding: 24px; color: var(--branco);
+  background: var(--preto-claro); border: 1px solid var(--dourado);
+  border-radius: 12px; box-shadow: var(--sombra);
+}
+.payment-dialog::backdrop { background: rgba(0,0,0,0.72); }
+.payment-dialog h3 { margin-bottom: 10px; color: var(--dourado); }
+.payment-dialog p { margin-bottom: 16px; color: var(--cinza-texto); }
+.payment-dialog label { display: block; margin-bottom: 6px; font-weight: 600; }
+.payment-dialog .flex { justify-content: flex-end; }
 .booking-steps { display: flex; gap: 12px; margin-bottom: 32px; flex-wrap: wrap; }
 .step {
   flex: 1; min-width: 120px; padding: 12px; text-align: center;

@@ -1379,6 +1379,50 @@ class SecurityRouteTests(unittest.TestCase):
         db.close()
         self.assertEqual(row["status"], "cancelled")
 
+    def test_completing_appointment_records_payment_method_as_received(self):
+        db = self.app_module.get_db()
+        db.execute("INSERT INTO barbers (name, active) VALUES ('Barbeiro pagamento informado', 1)")
+        barber_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO services (name, price, duration_min, active)
+            VALUES ('Corte pagamento informado', 45.50, 30, 1)
+        """)
+        service_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""
+            INSERT INTO appointments
+                (user_id, barber_id, service_id, appointment_date, start_time, end_time,
+                 status, service_price_cents)
+            VALUES ((SELECT id FROM users WHERE email='cliente@example.test'),
+                    ?, ?, '2026-10-20', '10:00', '10:30', 'scheduled', 4550)
+        """, (barber_id, service_id))
+        appointment_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        response = self.client.post("/admin/agenda/status", json={
+            "appointment_id": appointment_id, "status": "completed", "payment_method": "Pix"
+        })
+        self.assertEqual(response.status_code, 200)
+
+        db = self.app_module.get_db()
+        transaction = db.execute("""
+            SELECT amount_cents, payment_method, status
+            FROM financial_transactions WHERE appointment_id=?
+        """, (appointment_id,)).fetchone()
+        db.close()
+        self.assertEqual(transaction["amount_cents"], 4550)
+        self.assertEqual(transaction["payment_method"], "Pix")
+        self.assertEqual(transaction["status"], "paid")
+
+    def test_completing_appointment_rejects_unknown_payment_method(self):
+        self._login("admin@example.test")
+        response = self.client.post("/admin/agenda/status", json={
+            "appointment_id": 1, "status": "completed", "payment_method": "Cheque"
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Forma de pagamento inválida", response.json()["error"])
+
 
     def test_paid_appointment_income_cannot_be_cancelled_implicitly(self):
         db = self.app_module.get_db()
