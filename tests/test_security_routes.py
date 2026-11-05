@@ -2146,6 +2146,37 @@ class SecurityRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/area-cliente")
 
+    def test_slots_for_today_compare_only_local_clock_time(self):
+        from datetime import datetime as RealDateTime
+        from zoneinfo import ZoneInfo
+
+        today = RealDateTime.now(ZoneInfo("America/Sao_Paulo")).date()
+        db = self.app_module.get_db()
+        barber_id = db.execute("""
+            INSERT INTO barbers (name, active, work_start, work_end, lunch_start, lunch_end, work_days)
+            VALUES (?, 1, '09:00', '11:00', '12:00', '13:00', ?)
+            RETURNING id
+        """, ("Barbeiro teste horários hoje", f"[{today.isoweekday()}]")).fetchone()["id"]
+        service_id = db.execute("""
+            INSERT INTO services (name, price, duration_min, active)
+            VALUES (?, 50, 30, 1) RETURNING id
+        """, ("Serviço teste horários hoje",)).fetchone()["id"]
+        db.commit()
+        db.close()
+
+        class FixedDateTime(RealDateTime):
+            @classmethod
+            def now(cls, tz=None):
+                current = cls(today.year, today.month, today.day, 8, 0)
+                return current.replace(tzinfo=tz) if tz else current
+
+        with patch.object(self.app_module, "datetime", FixedDateTime):
+            response = self.client.get("/api/slots", params={
+                "barber_id": barber_id, "service_id": service_id, "date": today.isoformat()
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["slots"], ["09:00", "09:30", "10:00", "10:30"])
+
     def test_first_access_uses_barbershop_code_without_sending_email(self):
         self._login("admin@example.test")
         with patch("security_routes.smtplib.SMTP") as smtp_factory:

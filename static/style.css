@@ -201,6 +201,10 @@ select.form-control { appearance: none; background-image: url("data:image/svg+xm
 }
 .slot-btn:hover:not(:disabled) { border-color: var(--dourado); color: var(--dourado); }
 .slot-btn.selected { background: var(--dourado); color: var(--preto); border-color: var(--dourado); }
+.slot-btn.selected:hover:not(:disabled) {
+  background: var(--dourado); color: var(--preto); border-color: var(--dourado);
+  transform: none; box-shadow: none;
+}
 .slot-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .booking-steps { display: flex; gap: 12px; margin-bottom: 32px; flex-wrap: wrap; }
 .step {

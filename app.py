@@ -12,6 +12,7 @@ from email.message import EmailMessage
 from email.utils import parseaddr
 from datetime import date, datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request, Form, File, UploadFile, HTTPException, Depends, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -23,6 +24,8 @@ from database import DB_PATH, init_db, get_db, get_settings
 from db_compat import is_postgresql_configured
 from auth import hash_password, verify_password, normalize_cpf, valid_cpf, valid_birth_date
 from smtp_settings import get_smtp_config, public_smtp_settings, validate_smtp_form, save_smtp_settings
+
+BUSINESS_TIMEZONE = ZoneInfo("America/Sao_Paulo")
 
 # Inicializa banco
 init_db()
@@ -537,7 +540,11 @@ def api_slots(barber_id: int, date: str, service_id: int):
     except ValueError:
         db.close()
         return JSONResponse({"slots": [], "error": "Data inválida"})
-    work_days = json.loads(barber["work_days"])  # 1=Seg ... 7=Dom
+    try:
+        work_days = json.loads(barber["work_days"] or "[]")  # 1=Seg ... 7=Dom
+    except (TypeError, json.JSONDecodeError):
+        db.close()
+        return JSONResponse({"slots": [], "error": "A agenda deste barbeiro está configurada incorretamente."})
     if dt.isoweekday() not in work_days:
         db.close()
         return JSONResponse({"slots": [], "error": "Fechado neste dia"})
@@ -556,6 +563,7 @@ def api_slots(barber_id: int, date: str, service_id: int):
         booked_ranges.append((s, e))
 
     slots = []
+    now = datetime.now(BUSINESS_TIMEZONE)
     current = work_start
     while current + timedelta(minutes=duration) <= work_end:
         slot_end = current + timedelta(minutes=duration)
@@ -566,8 +574,9 @@ def api_slots(barber_id: int, date: str, service_id: int):
         # Verifica conflito
         conflict = any(not (slot_end <= bs or current >= be) for bs, be in booked_ranges)
         # Não permite agendar no passado (se for hoje)
-        now = datetime.now()
-        is_past = (dt.date() == now.date()) and (current <= now)
+        # current é somente horário (com data-base 1900); comparar o datetime
+        # diretamente com "agora" marcaria todos os horários de hoje como passados.
+        is_past = dt.date() == now.date() and current.time() <= now.time().replace(tzinfo=None)
         if not conflict and not is_past:
             slots.append(current.strftime("%H:%M"))
         current += timedelta(minutes=30)
@@ -590,7 +599,8 @@ async def api_agendar(request: Request):
         notes = str(data.get("notes", "")).strip()[:500]
     except (ValueError, TypeError, KeyError):
         return JSONResponse({"ok": False, "error": "Dados de agendamento inválidos."}, status_code=400)
-    if appointment_date < datetime.now().date():
+    now_local = datetime.now(BUSINESS_TIMEZONE)
+    if appointment_date < now_local.date():
         return JSONResponse({"ok": False, "error": "Não é possível agendar no passado."}, status_code=400)
     db = get_db()
     try:
@@ -619,7 +629,8 @@ async def api_agendar(request: Request):
         if (start < work_start or end > work_end or
                 (start < lunch_end and end > lunch_start) or start.minute not in (0, 30)):
             return JSONResponse({"ok": False, "error": "Horário fora da agenda de atendimento."}, status_code=400)
-        if appointment_date == datetime.now().date() and start.time() <= datetime.now().time():
+        if (appointment_date == now_local.date()
+                and start.time() <= now_local.time().replace(tzinfo=None)):
             return JSONResponse({"ok": False, "error": "Não é possível agendar um horário passado."}, status_code=400)
         db.execute("BEGIN IMMEDIATE")
         if is_postgresql_configured():

@@ -92,7 +92,9 @@ if (urlParams.get('service')) {
 }
 
 // Data mínima = hoje
-const today = new Date().toISOString().split('T')[0];
+const browserNow = new Date();
+const today = new Date(browserNow.getTime() - browserNow.getTimezoneOffset() * 60000)
+  .toISOString().split('T')[0];
 document.getElementById('appt_date').min = today;
 
 const staffBooking = {{ 'true' if user and user.role in ['admin', 'barber'] else 'false' }};
@@ -130,7 +132,7 @@ async function loadSlots() {
     const data = await res.json();
     if (data.slots && data.slots.length > 0) {
       container.innerHTML = '<label>Horários disponíveis:</label><div class="slot-grid">' +
-        data.slots.map(s => `<button class="slot-btn" onclick="selectSlot(this,'${s}')">${s}</button>`).join('') +
+        data.slots.map(s => `<button type="button" class="slot-btn" onclick="selectSlot(this,'${s}')">${s}</button>`).join('') +
         '</div>';
     } else {
       container.innerHTML = `<p class="text-muted text-center">${data.error || 'Nenhum horário disponível neste dia. Tente outra data.'}</p>`;

@@ -34,7 +34,7 @@
           <div class="detail">{{ a.service_name }} · R$ {{ "%.2f"|format(a.service_price) }} · {{ a.customer_phone }}</div>
           {% if a.notes %}<div class="detail" style="color:var(--dourado-claro);">📝 {{ a.notes }}</div>{% endif %}
         </div>
-        <span class="badge badge-{{ a.status }}">{{ a.status }}</span>
+        <span class="badge badge-{{ a.status }}">{{ {"scheduled": "Agendado", "completed": "Concluído", "cancelled": "Cancelado"}.get(a.status, a.status) }}</span>
         {% if a.status == 'scheduled' %}
         <div class="appt-actions">
           <button class="btn btn-success btn-sm" onclick="updateStatus({{ a.id }}, 'completed')">✓</button>

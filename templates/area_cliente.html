@@ -25,7 +25,7 @@
           {% if a.notes %} · Obs: {{ a.notes }}{% endif %}
         </div>
       </div>
-      <span class="badge badge-{{ a.status }}">{{ a.status }}</span>
+      <span class="badge badge-{{ a.status }}">{{ {"scheduled": "Agendado", "completed": "Concluído", "cancelled": "Cancelado"}.get(a.status, a.status) }}</span>
     </div>
     {% endfor %}
   {% endif %}
