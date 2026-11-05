@@ -207,7 +207,9 @@ select.form-control { appearance: none; background-image: url("data:image/svg+xm
 }
 .slot-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .payment-dialog {
-  width: min(92vw, 440px); padding: 24px; color: var(--branco);
+  position: fixed; inset: 0; margin: auto;
+  width: min(92vw, 440px); max-height: min(85vh, 560px); overflow-y: auto;
+  padding: 24px; color: var(--branco);
   background: var(--preto-claro); border: 1px solid var(--dourado);
   border-radius: 12px; box-shadow: var(--sombra);
 }
