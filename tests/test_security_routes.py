@@ -2084,8 +2084,32 @@ class SecurityRouteTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn("Estorno do lançamento;Possui estorno", response.text)
-        self.assertIn(f";Recebimento original CSV;25.00;;paid;;;;Sim", response.text)
-        self.assertIn(f";Estorno do lançamento CSV;25.00;;paid;;;{original_id};Não", response.text)
+        self.assertIn(f";Recebimento original CSV;25.00;;Pago;;;;Sim", response.text)
+        self.assertIn(f";Estorno do lançamento CSV;25.00;;Pago;;;{original_id};Não", response.text)
+
+    def test_finance_csv_translates_all_status_values(self):
+        db = self.app_module.get_db()
+        for status in ("paid", "pending", "cancelled"):
+            db.execute("""
+                INSERT INTO financial_transactions
+                    (transaction_type, category, description, amount_cents, occurred_on, status)
+                VALUES ('income', 'Teste status CSV', ?, 100, date('now'), ?)
+            """, (f"Status {status}", status))
+        db.commit()
+        db.close()
+
+        self._login("admin@example.test")
+        today = datetime.now().strftime("%Y-%m-%d")
+        response = self.client.get(
+            f"/admin/financeiro/exportar.csv?inicio={today}&fim={today}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(";Status paid;1.00;;Pago;", response.text)
+        self.assertIn(";Status pending;1.00;;Pendente;", response.text)
+        self.assertIn(";Status cancelled;1.00;;Cancelado;", response.text)
+        self.assertNotIn(";;paid;", response.text)
+        self.assertNotIn(";;pending;", response.text)
+        self.assertNotIn(";;cancelled;", response.text)
 
     def test_finance_csv_export_rejects_invalid_or_oversized_period(self):
         self._login("admin@example.test")

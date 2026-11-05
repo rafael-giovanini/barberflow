@@ -1226,6 +1226,11 @@ def admin_financeiro_exportar(request: Request, inicio: Optional[str] = None, fi
     writer.writerow(["Data", "Tipo", "Categoria", "Descrição", "Valor (R$)",
                      "Forma de pagamento", "Status", "Barbeiro", "Registrado por",
                      "Estorno do lançamento", "Possui estorno"])
+    status_labels = {
+        "paid": "Pago",
+        "pending": "Pendente",
+        "cancelled": "Cancelado",
+    }
     for row in rows:
         # Evita que campos textuais iniciados por caracteres de fórmula sejam
         # interpretados como fórmulas por planilhas ao abrir o CSV.
@@ -1239,7 +1244,7 @@ def admin_financeiro_exportar(request: Request, inicio: Optional[str] = None, fi
             datetime.strptime(row["occurred_on"], "%Y-%m-%d").strftime("%d/%m/%Y"),
             "Entrada" if row["transaction_type"] == "income" else "Despesa",
             values[0], values[1], f'{row["amount_cents"] / 100:.2f}',
-            values[2], row["status"], values[3], values[4],
+            values[2], status_labels.get(row["status"], row["status"]), values[3], values[4],
             row["reversal_of_id"] or "", "Sim" if row["has_reversal"] else "Não",
         ])
     filename = f"barberflow-financeiro-{inicio}-a-{fim}.csv"
