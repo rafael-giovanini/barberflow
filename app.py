@@ -337,8 +337,11 @@ def carrinho(request: Request):
 # ---------- Auth ----------
 @app.get("/cadastro", response_class=HTMLResponse)
 def cadastro_page(request: Request):
+    user = get_current_user(request)
+    if user and user.get("role") in ("admin", "barber"):
+        return RedirectResponse(url="/admin/clientes/novo", status_code=303)
     return templates.TemplateResponse("cadastro.html", {
-        "request": request, "user": None, "error": None, "values": {}, "created": False,
+        "request": request, "user": user, "error": None, "values": {}, "created": False,
         "today": date.today().isoformat()
     })
 
@@ -349,8 +352,12 @@ def cadastro(
     cpf: str = Form(...), birth_date: str = Form(...), zip_code: str = Form(...),
     address: str = Form(...), address_number: str = Form(...),
     address_complement: str = Form(""), neighborhood: str = Form(...),
-    city: str = Form(...), state: str = Form(...)
+    city: str = Form(...), state: str = Form(...),
+    password: str = Form(...), confirm_password: str = Form(...)
 ):
+    current_user = get_current_user(request)
+    if current_user and current_user.get("role") in ("admin", "barber"):
+        return RedirectResponse(url="/admin/clientes/novo", status_code=303)
     name, email = name.strip(), email.strip().lower()
     phone, cpf = phone.strip(), normalize_cpf(cpf)
     zip_code = "".join(ch for ch in zip_code if ch.isdigit())
@@ -372,9 +379,13 @@ def cadastro(
         error = "Preencha telefone e endereço completos."
     elif not valid_birth_date(birth_date):
         error = "Informe uma data de nascimento válida, que não esteja no futuro."
+    elif len(password) < 10:
+        error = "A senha deve ter pelo menos 10 caracteres."
+    elif password != confirm_password:
+        error = "As senhas não coincidem."
     if error:
         return templates.TemplateResponse("cadastro.html", {
-            "request": request, "user": None, "error": error, "values": values, "created": False,
+            "request": request, "user": current_user, "error": error, "values": values, "created": False,
             "today": date.today().isoformat()
         })
 
@@ -385,21 +396,21 @@ def cadastro(
                 (name, email, phone, cpf, birth_date, zip_code, address, address_number,
                  address_complement, neighborhood, city, state, password_hash,
                  first_access_required, role)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'customer')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'customer')
         """, (name, email, phone, cpf, birth_date, zip_code, address, address_number,
-              address_complement, neighborhood, city, state, hash_password(secrets.token_urlsafe(32))))
+              address_complement, neighborhood, city, state, hash_password(password)))
         db.commit()
     except sqlite3.IntegrityError:
         db.rollback()
         error = "Já existe uma conta com este CPF ou e-mail. Se você já tem cadastro, use Primeiro acesso."
         return templates.TemplateResponse("cadastro.html", {
-            "request": request, "user": None, "error": error, "values": values, "created": False,
+            "request": request, "user": current_user, "error": error, "values": values, "created": False,
             "today": date.today().isoformat()
         }, status_code=409)
     finally:
         db.close()
     return templates.TemplateResponse("cadastro.html", {
-        "request": request, "user": None, "error": None, "values": {}, "created": True,
+        "request": request, "user": current_user, "error": None, "values": {}, "created": True,
         "today": date.today().isoformat()
     })
 

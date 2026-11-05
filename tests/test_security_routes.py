@@ -2300,13 +2300,39 @@ class SecurityRouteTests(unittest.TestCase):
 
     def test_public_registration_requires_valid_cpf_and_full_customer_data(self):
         response = self.client.post("/cadastro", data=self._customer_form(
-            name="Cadastro CPF inválido", email="cpf.publico@example.test", cpf="11111111111"))
+            name="Cadastro CPF inválido", email="cpf.publico@example.test", cpf="11111111111",
+            password="SenhaCliente-456", confirm_password="SenhaCliente-456"))
         self.assertEqual(response.status_code, 200)
         self.assertIn("CPF válido", response.text)
         db = self.app_module.get_db()
         row = db.execute("SELECT id FROM users WHERE email=?", ("cpf.publico@example.test",)).fetchone()
         db.close()
         self.assertIsNone(row)
+
+    def test_public_registration_creates_account_with_customer_password(self):
+        response = self.client.post("/cadastro", data=self._customer_form(
+            email="cadastro.senha@example.test", cpf="52998224725",
+            password="SenhaCliente-456", confirm_password="SenhaCliente-456"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Sua senha já está criada", response.text)
+
+        db = self.app_module.get_db()
+        row = db.execute("""
+            SELECT password_hash, first_access_required, role
+            FROM users WHERE email=?
+        """, ("cadastro.senha@example.test",)).fetchone()
+        db.close()
+        self.assertEqual(row["role"], "customer")
+        self.assertEqual(row["first_access_required"], 0)
+        self.assertNotEqual(row["password_hash"], "SenhaCliente-456")
+        self.assertTrue(self.app_module.verify_password("SenhaCliente-456", row["password_hash"]))
+        self.assertEqual(self._login("cadastro.senha@example.test", "SenhaCliente-456").status_code, 303)
+
+    def test_staff_opening_public_signup_is_sent_to_staff_customer_form(self):
+        self._login("admin@example.test")
+        response = self.client.get("/cadastro")
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/admin/clientes/novo")
 
     def test_staff_customer_is_created_pending_first_access_without_password(self):
         self._login("admin@example.test")

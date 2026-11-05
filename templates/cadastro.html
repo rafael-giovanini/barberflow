@@ -2,8 +2,8 @@
 {% block title %}Cadastro de cliente — BarberFlow{% endblock %}
 {% block content %}
 <section class="section container" style="max-width:960px;"><div class="form-card customer-registration-card">
-  <h2 class="section-title">Cadastro de cliente</h2>
-  {% if created %}<div class="success-msg">Cadastro recebido. Para criar sua senha, solicite à barbearia um código de primeiro acesso pelo WhatsApp e depois acesse <a href="/primeiro-acesso">Solicitar acesso</a>.</div>{% endif %}
+  <h2 class="section-title">Criar sua conta</h2>
+  {% if created %}<div class="success-msg">Cadastro realizado! Sua senha já está criada. <a href="/login">Entre na sua conta</a> para continuar.</div>{% endif %}
   {% if request.query_params.get('cpf_nao_encontrado') %}<p class="text-muted">Não encontramos um cadastro para este CPF. Preencha seus dados para criar seu cadastro de cliente.</p>{% endif %}
   {% if error %}<div class="error-msg">{{ error }}</div>{% endif %}
   {% if not created %}<form method="post" action="/cadastro" class="customer-form-grid" data-address-form>
@@ -12,6 +12,8 @@
     <div class="form-group"><label for="birth_date">Data de nascimento</label><input id="birth_date" type="date" name="birth_date" class="form-control" value="{{ values.get('birth_date','') }}" max="{{ today }}" required></div>
     <div class="form-group"><label for="email">E-mail</label><input id="email" type="email" name="email" class="form-control" value="{{ values.get('email','') }}" autocomplete="email" maxlength="254" required></div>
     <div class="form-group"><label for="phone">Telefone / WhatsApp</label><input id="phone" type="tel" name="phone" data-mask="phone" class="form-control" value="{{ values.get('phone','') }}" autocomplete="tel" placeholder="(11) 99999-9999" required></div>
+    <div class="form-group"><label for="password">Criar senha</label><input id="password" type="password" name="password" class="form-control" autocomplete="new-password" minlength="10" required><small>Use pelo menos 10 caracteres.</small></div>
+    <div class="form-group"><label for="confirm_password">Confirmar senha</label><input id="confirm_password" type="password" name="confirm_password" class="form-control" autocomplete="new-password" minlength="10" required></div>
     <h3 class="form-grid-full">Endereço</h3>
     <div class="form-group"><label for="zip_code">CEP</label><input id="zip_code" type="text" name="zip_code" data-mask="cep" class="form-control" value="{{ values.get('zip_code','') }}" inputmode="numeric" autocomplete="postal-code" maxlength="9" placeholder="00000-000" required><small class="field-hint form-grid-full" data-cep-message aria-live="polite"></small></div>
     <div class="form-group"><label for="address">Rua / Avenida</label><input id="address" type="text" name="address" class="form-control" value="{{ values.get('address','') }}" autocomplete="address-line1" required></div>
