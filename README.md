@@ -49,16 +49,56 @@ Como alternativa, utilize o Uvicorn:
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-Por padrão, a aplicação utiliza SQLite quando não há uma variável `DATABASE_URL` configurada.
+### Banco de dados
+
+O backend é selecionado pela variável de ambiente `DATABASE_URL`:
+
+- Sem `DATABASE_URL`, a aplicação utiliza SQLite local.
+- Com `DATABASE_URL`, a aplicação utiliza PostgreSQL. O schema é criado na inicialização; os dados iniciais de serviços são inseridos somente quando a tabela correspondente está vazia.
+
+Exemplo de configuração local com PostgreSQL:
+
+```powershell
+$env:DATABASE_URL="postgresql://usuario:senha@host:5432/barberflow"
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
+
+Em ambientes como Neon e Render, configure `DATABASE_URL` como variável secreta do serviço. Utilize bancos separados para desenvolvimento, demonstração e produção. Não execute rotinas de demonstração ou testes destrutivos em uma base operacional.
+
+#### Migração de SQLite para PostgreSQL
+
+O utilitário `migrate_sqlite_to_postgres.py` permite auditar e importar os dados existentes. O processo preserva IDs, relações, histórico, configurações e contadores de IDs, sem apagar ou alterar o arquivo SQLite de origem.
+
+Antes da migração:
+- Faça backup dos bancos de origem e destino.
+- Coloque a aplicação em manutenção para impedir novas gravações durante a cópia.
+- Configure como destino um banco PostgreSQL exclusivo e vazio.
+
+Execute primeiro a auditoria, em modo somente leitura:
+
+```powershell
+python migrate_sqlite_to_postgres.py --sqlite "C:\caminho\barbearia.db"
+```
+
+Após conferir os totais, configure `DATABASE_URL` para o banco de destino e execute a importação:
+
+```powershell
+$env:DATABASE_URL="postgresql://usuario:senha@host:5432/barberflow"
+python migrate_sqlite_to_postgres.py --sqlite "C:\caminho\barbearia.db" --apply
+```
+
+A importação é realizada em uma transação e o utilitário recusa destinos que já contenham registros. Após a execução, compare os totais e valide o funcionamento antes de alterar a configuração do serviço. Arquivos enviados, como imagens da pasta `uploads/`, não fazem parte do banco e devem ser transferidos separadamente para o armazenamento persistente do ambiente de destino. Preserve o banco SQLite e os backups até concluir a validação e definir o procedimento de retorno.
 
 ### Execução com Docker Compose
 
-Crie um arquivo `.env` na raiz do projeto e informe as credenciais iniciais e a chave de sessão:
+Crie um arquivo `.env` na raiz do projeto com as credenciais iniciais e a chave de sessão:
 
 ```dotenv
 INITIAL_ADMIN_EMAIL=admin@exemplo.com
 INITIAL_ADMIN_PASSWORD=defina-uma-senha-forte
 SECRET_KEY=defina-um-segredo-aleatorio-e-persistente
+# Opcional: configure para utilizar PostgreSQL em vez de SQLite.
+DATABASE_URL=postgresql://usuario:senha@host:5432/barberflow
 ```
 
 Gere uma chave segura com:
@@ -73,9 +113,9 @@ Inicie os contêineres:
 docker compose up --build -d
 ```
 
-A aplicação ficará disponível em `http://localhost:8000`. O painel administrativo poderá ser acessado em `http://localhost:8000/admin`.
+A aplicação ficará disponível em `http://localhost:8000`, e o painel administrativo em `http://localhost:8000/admin`.
 
-O banco SQLite é armazenado no volume persistente `barberflow_data`. Evite utilizar `docker compose down -v` em ambientes com dados que devam ser preservados, pois esse comando remove os volumes associados.
+Sem `DATABASE_URL`, o banco SQLite é armazenado no volume persistente `barberflow_data`. Com `DATABASE_URL`, os dados são armazenados no PostgreSQL configurado; o volume local permanece utilizado para os arquivos enviados. O comando `docker compose down -v` remove os volumes locais e os arquivos armazenados neles. Utilize-o somente quando a remoção desses dados for intencional.
 
 ## Configuração para produção
 
