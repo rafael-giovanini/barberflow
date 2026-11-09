@@ -1,154 +1,151 @@
 # BarberFlow
 
-Sistema de gestão para barbearias, desenvolvido para centralizar o atendimento ao cliente e as rotinas operacionais do estabelecimento em uma única plataforma.
+Sistema web de gestão para barbearias, com área pública para clientes e painel administrativo para operação do estabelecimento.
 
-## Visão geral
+> **Estado desta branch:** a implementação disponível em `feature/clientes-senhas` utiliza SQLite. O suporte PostgreSQL/Neon e a migração SQLite → PostgreSQL ainda dependem da integração e validação dos módulos existentes em outra branch. Não configure `DATABASE_URL` nesta branch esperando que o backend mude para PostgreSQL.
 
-O BarberFlow reúne recursos para atendimento, agendamento, gestão de serviços, produtos e acompanhamento das atividades da barbearia.
+## Funcionalidades
 
 ### Área do cliente
-- Apresentação dos serviços, preços e portfólio.
-- Consulta de disponibilidade e agendamento on-line.
-- Cadastro, autenticação e área para acompanhamento de agendamentos e pedidos.
-- Loja on-line com catálogo de produtos, carrinho e checkout.
+- Apresentação de serviços, preços e portfólio.
+- Consulta de disponibilidade e solicitação de agendamentos.
+- Cadastro, autenticação e área do cliente.
+- Loja on-line, catálogo, carrinho e pedidos.
+- Primeiro acesso, alteração e recuperação de senha por e-mail.
 
 ### Painel administrativo
-- Dashboard com indicadores operacionais e financeiros.
+- Dashboard operacional e financeiro.
 - Gestão de agenda e agendamentos.
-- Cadastro e manutenção de serviços, preços e duração.
-- Gestão de produtos, categorias e estoque.
-- Administração do portfólio de cortes.
-- Acompanhamento de pedidos da loja.
+- Cadastro e manutenção de clientes e barbeiros.
+- Gestão de serviços, preços e duração.
+- Gestão de produtos, categorias, estoque e movimentações.
+- Administração do portfólio.
+- Acompanhamento de pedidos.
+- Lançamentos financeiros, comissões, confirmações, estornos e exportação CSV.
+- Configurações da barbearia e SMTP.
+
+## Tecnologias
+
+- Python 3.12
+- FastAPI e Uvicorn
+- Jinja2
+- SQLite nesta branch
+- Docker e Docker Compose (opcionais)
+
+As versões das dependências estão fixadas em `requirements.txt`.
 
 ## Requisitos
 
-- Python compatível com as dependências definidas em `requirements.txt`.
-- Docker Engine e Docker Compose, caso a implantação seja realizada por contêiner.
-- Navegador web atualizado.
-- Para disponibilização pública, domínio, HTTPS e serviço de hospedagem compatível.
+- Python 3.12 recomendado.
+- Navegador atualizado.
+- Docker Engine e Docker Compose, se utilizar contêiner.
+- Para produção: domínio, HTTPS, armazenamento persistente e serviço SMTP.
 
-## Instalação e execução
+## Instalação local
 
-### Execução local
+Windows PowerShell:
 
-Instale as dependências:
-
-```bash
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
+uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
-Inicie a aplicação:
+Linux/macOS:
 
 ```bash
-python app.py
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
-Como alternativa, utilize o Uvicorn:
+Acesse http://127.0.0.1:8000.
 
-```bash
-uvicorn app:app --host 0.0.0.0 --port 8000
-```
+## Banco de dados
 
-### Banco de dados
+Nesta branch, a aplicação utiliza SQLite. O arquivo padrão é `barbearia.db`, localizado junto a `database.py`. A variável `DATABASE_PATH` permite definir outro caminho. O banco precisa estar em armazenamento persistente e com permissões adequadas para o processo da aplicação.
 
-O backend é selecionado pela variável de ambiente `DATABASE_URL`:
+O banco é inicializado pela aplicação e o esquema recebe atualizações compatíveis na inicialização. Faça backup antes de qualquer atualização.
 
-- Sem `DATABASE_URL`, a aplicação utiliza SQLite local.
-- Com `DATABASE_URL`, a aplicação utiliza PostgreSQL. O schema é criado na inicialização; os dados iniciais de serviços são inseridos somente quando a tabela correspondente está vazia.
+**PostgreSQL/Neon:** não está ativo nesta branch. Os arquivos necessários ao backend PostgreSQL e ao utilitário de migração não fazem parte deste snapshot. Consulte o manual completo e aguarde a integração validada antes de utilizar esse modo.
 
-Exemplo de configuração local com PostgreSQL:
+## Configuração
 
-```powershell
-$env:DATABASE_URL="postgresql://usuario:senha@host:5432/barberflow"
-uvicorn app:app --host 0.0.0.0 --port 8000
-```
+Use `.env.example` como referência e configure variáveis diretamente no ambiente de execução ou no gerenciador de segredos da hospedagem. Não versione credenciais reais.
 
-Em ambientes como Neon e Render, configure `DATABASE_URL` como variável secreta do serviço. Utilize bancos separados para desenvolvimento, demonstração e produção. Não execute rotinas de demonstração ou testes destrutivos em uma base operacional.
+Variáveis relevantes:
+- `DATABASE_PATH`: caminho do banco SQLite.
+- `SECRET_KEY`: segredo aleatório persistente, mínimo de 32 caracteres em produção.
+- `ENVIRONMENT=production`: ativa verificações de produção.
+- `COOKIE_SECURE=1`: cookie seguro para HTTPS.
+- `INITIAL_ADMIN_EMAIL` e `INITIAL_ADMIN_PASSWORD`: credenciais de provisionamento inicial, quando aplicável.
+- `APP_BASE_URL`: URL pública HTTPS usada nos links de e-mail.
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_SECURITY`: configuração de e-mail.
 
-#### Migração de SQLite para PostgreSQL
-
-O utilitário `migrate_sqlite_to_postgres.py` permite auditar e importar os dados existentes. O processo preserva IDs, relações, histórico, configurações e contadores de IDs, sem apagar ou alterar o arquivo SQLite de origem.
-
-Antes da migração:
-- Faça backup dos bancos de origem e destino.
-- Coloque a aplicação em manutenção para impedir novas gravações durante a cópia.
-- Configure como destino um banco PostgreSQL exclusivo e vazio.
-
-Execute primeiro a auditoria, em modo somente leitura:
-
-```powershell
-python migrate_sqlite_to_postgres.py --sqlite "C:\caminho\barbearia.db"
-```
-
-Após conferir os totais, configure `DATABASE_URL` para o banco de destino e execute a importação:
-
-```powershell
-$env:DATABASE_URL="postgresql://usuario:senha@host:5432/barberflow"
-python migrate_sqlite_to_postgres.py --sqlite "C:\caminho\barbearia.db" --apply
-```
-
-A importação é realizada em uma transação e o utilitário recusa destinos que já contenham registros. Após a execução, compare os totais e valide o funcionamento antes de alterar a configuração do serviço. Arquivos enviados, como imagens da pasta `uploads/`, não fazem parte do banco e devem ser transferidos separadamente para o armazenamento persistente do ambiente de destino. Preserve o banco SQLite e os backups até concluir a validação e definir o procedimento de retorno.
-
-### Execução com Docker Compose
-
-Crie um arquivo `.env` na raiz do projeto com as credenciais iniciais e a chave de sessão:
-
-```dotenv
-INITIAL_ADMIN_EMAIL=admin@exemplo.com
-INITIAL_ADMIN_PASSWORD=defina-uma-senha-forte
-SECRET_KEY=defina-um-segredo-aleatorio-e-persistente
-# Opcional: configure para utilizar PostgreSQL em vez de SQLite.
-DATABASE_URL=postgresql://usuario:senha@host:5432/barberflow
-```
-
-Gere uma chave segura com:
+Gere um segredo com:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-Inicie os contêineres:
+Mantenha `SECRET_KEY` estável e protegida. A troca pode invalidar sessões e impedir a descriptografia da senha SMTP já armazenada.
+
+## Docker Compose
+
+Configure as variáveis de ambiente e execute:
 
 ```bash
 docker compose up --build -d
+docker compose logs -f barberflow
 ```
 
-A aplicação ficará disponível em `http://localhost:8000`, e o painel administrativo em `http://localhost:8000/admin`.
+O Compose mantém o SQLite em um volume persistente chamado `barberflow_data`. O comando `docker compose down -v` remove os volumes e pode apagar o banco; utilize-o somente quando essa remoção for intencional e houver backup.
 
-Sem `DATABASE_URL`, o banco SQLite é armazenado no volume persistente `barberflow_data`. Com `DATABASE_URL`, os dados são armazenados no PostgreSQL configurado; o volume local permanece utilizado para os arquivos enviados. O comando `docker compose down -v` remove os volumes locais e os arquivos armazenados neles. Utilize-o somente quando a remoção desses dados for intencional.
+## Segurança e produção
 
-## Configuração para produção
+Antes de publicar:
+- Utilize HTTPS e proxy reverso corretamente configurado.
+- Defina `ENVIRONMENT=production` e `SECRET_KEY` forte e persistente.
+- Garanta persistência do banco e dos arquivos em `uploads/`.
+- Configure e teste SMTP e recuperação de senha.
+- Revise a conta administrativa e remova credenciais temporárias.
+- Configure backups, retenção e testes de restauração.
+- Execute testes automatizados e valide permissões por perfil.
+- Não exponha credenciais, tokens ou dados pessoais em logs.
 
-Antes de disponibilizar o sistema publicamente:
+O sistema processa dados pessoais, incluindo CPF e endereço. A operação deve estabelecer políticas, bases legais, controles e procedimentos compatíveis com a LGPD. A implementação técnica, isoladamente, não comprova conformidade integral.
 
-- Defina `ENVIRONMENT=production`.
-- Configure uma `SECRET_KEY` forte, persistente e armazenada de forma segura.
-- Configure `COOKIE_SECURE=1` quando a aplicação estiver operando com HTTPS.
-- Publique a aplicação atrás de um proxy ou serviço com HTTPS.
-- Configure o serviço SMTP e a URL pública HTTPS para habilitar o envio de mensagens e a recuperação de senha.
-- Utilize armazenamento persistente para o banco de dados e para os arquivos enviados ao sistema.
-- Mantenha rotinas de backup e procedimentos testados de restauração.
+## Demonstração
 
-Não exponha a aplicação publicamente sem HTTPS. Não armazene credenciais reais no repositório ou em arquivos versionados.
+A rotina `seed_demo.py` cria uma base SQLite separada com dados fictícios. Leia [docs/DEMONSTRACAO.md](docs/DEMONSTRACAO.md) antes de executá-la. Nunca aponte o seed para uma base operacional. O parâmetro `--reset` apaga a base de demonstração indicada.
 
-## Cadastro e primeiro acesso do cliente
+## Testes
 
-O cliente pode realizar o cadastro pela área pública. Quando o cadastro é realizado pela administração, os dados são registrados no painel e o próprio cliente define sua senha por meio do fluxo de primeiro acesso.
+Execute localmente:
 
-Para cadastros existentes, o sistema encaminha um link individual e temporário ao endereço de e-mail registrado. O link expira após 30 minutos. O envio depende da configuração correta do SMTP e da URL pública HTTPS.
+```bash
+python -m compileall -q app.py auth.py database.py security_routes.py
+python -m unittest discover -s tests -v
+```
 
-O CPF é utilizado na identificação do cadastro e deve ser único. A informação do CPF, isoladamente, não permite criar ou redefinir uma senha.
+O workflow `.github/workflows/validate.yml` executa validação de sintaxe e testes unitários em pushes para `main` e branches `feature/**`, e em pull requests destinados a `main`. Considere testes aprovados somente quando houver execução concluída vinculada ao SHA do commit avaliado.
 
-## Segurança
+## Documentação
 
-- Senhas armazenadas com hash PBKDF2.
-- Sessões assinadas e cookies HTTP-only.
-- Chave de sessão configurável por variável de ambiente.
-- Criação da conta administrativa inicial por credenciais definidas no ambiente.
-- Fluxo de recuperação de senha com link temporário enviado por e-mail.
+- [Manual completo do BarberFlow](docs/MANUAL-COMPLETO.md)
+- [Implantação e recuperação](docs/IMPLANTACAO-E-RECUPERACAO.md)
+- [Ambiente de demonstração](docs/DEMONSTRACAO.md)
+- [Plano de melhorias de clientes e senhas](docs/PLANO-MELHORIAS-CLIENTES-SENHAS.md)
 
-A chave `SECRET_KEY` deve ser mantida em sigilo e não deve ser alterada sem planejamento, pois é utilizada em mecanismos de segurança da aplicação. Proteja também as credenciais SMTP e as cópias de segurança.
+## Limitações conhecidas desta branch
 
-## Ambiente de demonstração
+- Backend SQLite; PostgreSQL/Neon depende de integração pendente.
+- Arquitetura multiempresa Database per Tenant ainda não implementada neste snapshot.
+- Não foi confirmada integração com gateway de pagamento ou emissão fiscal.
+- O armazenamento local de arquivos e SQLite exige avaliação antes de escalar para múltiplas instâncias.
 
-As instruções para preparar uma base de demonstração com dados fictícios estão disponíveis em [docs/DEMONSTRACAO.md](docs/DEMONSTRACAO.md). O procedimento utiliza uma base separada e não deve ser executado apontando para o banco de dados operacional.
+A documentação deve acompanhar cada alteração de funcionalidade, arquitetura, segurança, persistência e implantação.
